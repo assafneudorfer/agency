@@ -1,0 +1,12 @@
+aws_region         = "us-east-1"
+base_domain        = "agency.example.com"
+cloudflare_zone_id = "your-zone-id"
+acme_email         = "you@example.com"
+admin_email        = "you@example.com"
+repo_ref           = "main"
+
+# Pass secrets with TF_VAR_ environment variables instead of this file:
+#   export CLOUDFLARE_API_TOKEN=...            # for Terraform's Cloudflare provider
+#   export TF_VAR_cloudflare_dns_api_token=... # for Traefik certificates (can be the same token)
+#   export TF_VAR_admin_password=...
+#   export TF_VAR_anthropic_api_key=...

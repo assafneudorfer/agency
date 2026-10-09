@@ -1,0 +1,97 @@
+# Agency: self-hosted AI app builder on top of pi.
+# Production: TLS with a Let's Encrypt wildcard certificate via Cloudflare DNS.
+# Local: docker compose -f docker-compose.yml -f docker-compose.local.yml up
+name: agency
+
+services:
+  traefik:
+    image: traefik:v3.6.2
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=agency
+      - --entrypoints.http.address=:80
+      - --entrypoints.http.http.redirections.entrypoint.to=app
+      - --entrypoints.http.http.redirections.entrypoint.scheme=https
+      - --entrypoints.app.address=:443
+      - --entrypoints.app.http.tls.certresolver=cf
+      - --entrypoints.app.http.tls.domains[0].main=${AGENCY_BASE_DOMAIN}
+      - --entrypoints.app.http.tls.domains[0].sans=*.${AGENCY_BASE_DOMAIN}
+      - --certificatesresolvers.cf.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.cf.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.cf.acme.dnschallenge.provider=cloudflare
+    environment:
+      CF_DNS_API_TOKEN: ${CLOUDFLARE_DNS_API_TOKEN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    labels:
+      # Previews and published apps use this middleware: only signed-in team members get through.
+      # Declared on Traefik itself so it exists even while the platform restarts.
+      traefik.enable: "true"
+      traefik.http.middlewares.agency-auth.forwardauth.address: http://platform:8080/auth/verify
+      traefik.http.middlewares.agency-auth.forwardauth.trustForwardHeader: "true"
+    networks: [agency]
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17.6
+    environment:
+      POSTGRES_USER: agency
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: agency
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agency"]
+      interval: 5s
+      retries: 20
+    networks: [agency]
+    restart: unless-stopped
+
+  platform:
+    build: ./platform
+    image: agency-platform:latest
+    environment:
+      AGENCY_BASE_DOMAIN: ${AGENCY_BASE_DOMAIN:?set AGENCY_BASE_DOMAIN in .env}
+      AGENCY_PUBLIC_SCHEME: ${AGENCY_PUBLIC_SCHEME:-https}
+      AGENCY_SECRET_KEY: ${AGENCY_SECRET_KEY:?set AGENCY_SECRET_KEY in .env}
+      AGENCY_ADMIN_EMAIL: ${AGENCY_ADMIN_EMAIL:-}
+      AGENCY_ADMIN_PASSWORD: ${AGENCY_ADMIN_PASSWORD:-}
+      AGENCY_MODEL: ${AGENCY_MODEL:-}
+      DATABASE_URL: postgres://agency:${POSTGRES_PASSWORD}@postgres:5432/agency
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.platform.rule: Host(`${AGENCY_BASE_DOMAIN}`)
+      traefik.http.routers.platform.entrypoints: app
+      traefik.http.services.platform.loadbalancer.server.port: "8080"
+    networks: [agency]
+    restart: unless-stopped
+
+  # Build-only service for the per-app sandbox image: docker compose --profile build build sandbox
+  sandbox:
+    build:
+      context: ..
+      dockerfile: agency/sandbox/Dockerfile
+    image: agency-sandbox:latest
+    profiles: [build]
+
+networks:
+  agency:
+    name: agency
+
+volumes:
+  pgdata:
+  letsencrypt:

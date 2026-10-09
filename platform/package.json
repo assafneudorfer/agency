@@ -1,0 +1,23 @@
+{
+	"name": "agency-platform",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"start": "node src/main.ts",
+		"typecheck": "tsc --noEmit -p ."
+	},
+	"dependencies": {
+		"@hono/node-server": "2.1.4",
+		"@modelcontextprotocol/sdk": "1.32.1",
+		"hono": "4.13.13",
+		"htm": "3.1.1",
+		"pg": "8.23.1",
+		"preact": "11.0.1",
+		"zod": "4.6.5"
+	},
+	"devDependencies": {
+		"@types/node": "22.19.19",
+		"@types/pg": "8.23.1",
+		"typescript": "7.0.2"
+	}
+}

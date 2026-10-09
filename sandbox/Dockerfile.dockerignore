@@ -1,0 +1,8 @@
+**/node_modules
+**/dist
+.git
+.artifacts
+agency/platform
+agency/infra
+agency/sandbox/template/.next
+agency/sandbox/template/.next-build

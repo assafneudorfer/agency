@@ -1,0 +1,14 @@
+# Local override: plain HTTP on port 80, no certificates.
+# Use AGENCY_BASE_DOMAIN=localtest.me (it and all its subdomains resolve to 127.0.0.1).
+services:
+  traefik:
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=agency
+      - --entrypoints.app.address=:80
+    ports: !override
+      - "80:80"
+  platform:
+    environment:
+      AGENCY_PUBLIC_SCHEME: http

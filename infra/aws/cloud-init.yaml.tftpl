@@ -1,0 +1,37 @@
+#cloud-config
+package_update: true
+packages:
+  - git
+  - ca-certificates
+  - curl
+  - unzip
+
+write_files:
+  - path: /usr/local/bin/agency-deploy
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Pulls the configured branch, refreshes .env from SSM and rebuilds the stack.
+      set -euo pipefail
+      SRC=/opt/agency-src
+      if [ ! -d "$SRC/.git" ]; then
+        git clone --branch "${repo_ref}" "${repo_url}" "$SRC"
+      else
+        git -C "$SRC" fetch origin "${repo_ref}"
+        git -C "$SRC" checkout -q FETCH_HEAD
+      fi
+      cd "$SRC/agency"
+      umask 077
+      aws ssm get-parameter --region "${region}" --name "${env_parameter}" --with-decryption \
+        --query Parameter.Value --output text > .env
+      docker compose --profile build build sandbox
+      docker compose up -d --build --remove-orphans
+      docker image prune -f >/dev/null
+
+runcmd:
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable --now docker
+  - curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  - unzip -q /tmp/awscliv2.zip -d /tmp
+  - /tmp/aws/install
+  - /usr/local/bin/agency-deploy

@@ -29,6 +29,8 @@ write_files:
       docker image prune -f >/dev/null
 
 runcmd:
+  # Swap lets small test instances build the images and run a sandbox without running out of memory.
+  - fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable --now docker
   - curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip

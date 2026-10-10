@@ -91,6 +91,17 @@ variable "openai_api_key" {
   default   = ""
 }
 
+variable "sandbox_memory" {
+  description = "Memory limit per app sandbox. Use 1500m on a small test instance"
+  type        = string
+  default     = "3g"
+}
+
+variable "sandbox_cpus" {
+  type    = string
+  default = "2"
+}
+
 variable "agency_model" {
   description = "Optional pi model pattern, for example anthropic/claude-sonnet-4-5"
   type        = string

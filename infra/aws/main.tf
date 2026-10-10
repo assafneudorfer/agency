@@ -37,6 +37,8 @@ resource "aws_ssm_parameter" "env" {
     "ANTHROPIC_API_KEY=${var.anthropic_api_key}",
     "OPENAI_API_KEY=${var.openai_api_key}",
     "AGENCY_MODEL=${var.agency_model}",
+    "AGENCY_SANDBOX_MEMORY=${var.sandbox_memory}",
+    "AGENCY_SANDBOX_CPUS=${var.sandbox_cpus}",
   ])
 }
 

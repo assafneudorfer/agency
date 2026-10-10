@@ -32,25 +32,23 @@ See [PLAN.md](PLAN.md) for the roadmap.
 
 ## Deploy on AWS with Cloudflare DNS
 
-Requirements: an AWS account, a Cloudflare zone for your domain, Terraform 1.6+, and an LLM API key (Anthropic by default).
+Requirements: an AWS account with the AWS CLI signed in, a Cloudflare zone for your domain, Terraform 1.6+, and a Claude API key.
 
 1. Create a Cloudflare API token with **Zone > DNS > Edit** on the zone.
-2. `cd agency/infra/aws && cp terraform.tfvars.example terraform.tfvars` and fill in the domain, zone id and emails.
-3. Export secrets and apply:
+2. Run the deploy script and answer its questions:
 
    ```bash
-   export CLOUDFLARE_API_TOKEN=...             # Terraform creates the DNS records
-   export TF_VAR_cloudflare_dns_api_token=...  # Traefik issues the wildcard certificate (same token is fine)
-   export TF_VAR_admin_password='a long password'
-   export TF_VAR_anthropic_api_key=sk-ant-...
-   terraform init && terraform apply
+   cd agency/infra/aws
+   ./deploy.sh
    ```
 
-4. The instance installs Docker, clones the repository, builds the images and starts the stack (about 10 minutes on first boot). Open the `url` output and sign in with the admin email and password.
+   It asks for the Claude API key, the Cloudflare token and an admin password at hidden prompts (or reads `ANTHROPIC_API_KEY`, `CLOUDFLARE_API_TOKEN` and `ADMIN_PASSWORD` from the environment), checks both keys, finds the Cloudflare zone, shows the Terraform plan and applies it after you confirm. Choose `small` (t3.medium) for testing or `standard` (t3.xlarge) for the team.
+3. The server builds the images and starts the stack on first boot. The script waits until the site answers, then you sign in with the admin email and password.
 
-This creates one EC2 instance (`t3.xlarge`, 100 GB encrypted gp3) with an Elastic IP, a security group for 80/443, an IAM role for Session Manager, the `.env` as a SecureString in SSM Parameter Store, and two Cloudflare A records (`base_domain` and `*.base_domain`). Records are DNS-only by default: Cloudflare's free edge certificate does not cover a second-level wildcard such as `*.agency.example.com`, while Traefik's Let's Encrypt wildcard does. Set `cloudflare_proxied = true` only if the base domain is the zone apex or the zone has Advanced Certificate Manager.
+Secrets never go into files or command lines from the script; they reach the server only through an encrypted SSM SecureString. Terraform state does contain them, so `terraform.tfstate` stays private on your machine (mode 600). `./deploy.sh update` redeploys the latest code on the branch, and `./deploy.sh destroy` removes everything.
 
-To update after pushing changes: `aws ssm start-session --target <instance_id>` then `sudo agency-deploy`.
+This creates one EC2 instance (`t3.medium` with 40 GB or `t3.xlarge` with 100 GB, encrypted gp3, plus 4 GB swap) with an Elastic IP, a security group for 80/443, an IAM role for Session Manager, the `.env` as a SecureString in SSM Parameter Store, and two Cloudflare A records (`base_domain` and `*.base_domain`). Records are DNS-only by default: Cloudflare's free edge certificate does not cover a second-level wildcard such as `*.agency.example.com`, while Traefik's Let's Encrypt wildcard does. Set `cloudflare_proxied = true` only if the base domain is the zone apex or the zone has Advanced Certificate Manager.
+
 
 ## Run locally
 

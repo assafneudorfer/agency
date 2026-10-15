@@ -3,6 +3,9 @@
 #
 #   ./deploy.sh            create or update the stack (asks for anything it needs)
 #   ./deploy.sh update     pull the latest code on the server and rebuild
+#   ./deploy.sh stop       stop the server to save money (data, address and DNS stay)
+#   ./deploy.sh start      start it again; the stack comes back on its own
+#   ./deploy.sh status     show whether the server is running
 #   ./deploy.sh destroy    delete everything this script created
 #
 # Secrets (Claude API key, Cloudflare token, admin password) are read from the environment or
@@ -124,7 +127,7 @@ verify_keys() {
 
 wait_until_up() {
 	local url=$1
-	info "Waiting for $url (first boot builds the images; about 10 to 20 minutes on a small instance)"
+	info "Waiting for $url (the first boot builds the images, about 10 to 20 minutes on a small instance; a restart takes a minute or two)"
 	for _ in $(seq 1 90); do
 		if curl -fsS -o /dev/null --max-time 5 "$url/healthz" 2>/dev/null; then
 			info "Agency is up: $url"
@@ -137,6 +140,11 @@ wait_until_up() {
 
 region() {
 	grep -E '^aws_region' "$SETTINGS" | cut -d'"' -f2
+}
+
+instance_state() {
+	aws ec2 describe-instances --region "$(region)" --instance-ids "$(terraform output -raw instance_id)" \
+		--query 'Reservations[0].Instances[0].State.Name' --output text
 }
 
 case "$ACTION" in
@@ -165,6 +173,29 @@ update)
 		--query Command.CommandId --output text
 	echo "Started. Follow it in the AWS console under Systems Manager > Run Command."
 	;;
+stop)
+	check_aws
+	info "Stopping the server (disk, Elastic IP and DNS records are kept)"
+	aws ec2 stop-instances --region "$(region)" --instance-ids "$(terraform output -raw instance_id)" >/dev/null
+	aws ec2 wait instance-stopped --region "$(region)" --instance-ids "$(terraform output -raw instance_id)"
+	info "Stopped. Start it again with: ./deploy.sh start"
+	;;
+start)
+	check_aws
+	info "Starting the server"
+	aws ec2 start-instances --region "$(region)" --instance-ids "$(terraform output -raw instance_id)" >/dev/null
+	aws ec2 wait instance-running --region "$(region)" --instance-ids "$(terraform output -raw instance_id)"
+	wait_until_up "$(terraform output -raw url)"
+	;;
+status)
+	check_aws
+	echo "Server: $(instance_state)"
+	if curl -fsS -o /dev/null --max-time 5 "$(terraform output -raw url)/healthz" 2>/dev/null; then
+		echo "Site:   up at $(terraform output -raw url)"
+	else
+		echo "Site:   not answering"
+	fi
+	;;
 destroy)
 	check_aws
 	tf_secret_vars
@@ -173,6 +204,6 @@ destroy)
 	terraform destroy -input=false -auto-approve
 	;;
 *)
-	fail "Unknown command '$ACTION'. Use deploy, update or destroy."
+	fail "Unknown command '$ACTION'. Use deploy, update, stop, start, status or destroy."
 	;;
 esac

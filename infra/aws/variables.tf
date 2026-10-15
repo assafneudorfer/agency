@@ -37,9 +37,9 @@ variable "cloudflare_proxied" {
 }
 
 variable "repo_url" {
-  description = "Git repository with the agency directory"
+  description = "Agency git repository"
   type        = string
-  default     = "https://github.com/assafneudorfer/pi.git"
+  default     = "https://github.com/assafneudorfer/agency.git"
 }
 
 variable "repo_ref" {

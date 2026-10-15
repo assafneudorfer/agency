@@ -85,8 +85,8 @@ services:
   # Build-only service for the per-app sandbox image: docker compose --profile build build sandbox
   sandbox:
     build:
-      context: ..
-      dockerfile: agency/sandbox/Dockerfile
+      context: .
+      dockerfile: sandbox/Dockerfile
     image: agency-sandbox:latest
     profiles: [build]
 

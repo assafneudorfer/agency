@@ -4,7 +4,7 @@ Agreed in the project thread on 2026-10-09. Target: Assaf's team, self-hosted on
 
 ## 1. Builder core (MVP, implemented)
 
-A chat beside a live preview. Each app is a Docker sandbox from a Next.js + Postgres template; the pi coding agent from this repository edits it in RPC mode. Every agent turn is a git commit with restore.
+A chat beside a live preview. Each app is a Docker sandbox from a Next.js + Postgres template; the pi coding agent (npm package, pinned version) edits it in RPC mode. Every agent turn is a git commit with restore.
 
 ## 2. Data connectors (MVP, implemented)
 

@@ -20,7 +20,7 @@ write_files:
         git -C "$SRC" fetch origin "${repo_ref}"
         git -C "$SRC" checkout -q FETCH_HEAD
       fi
-      cd "$SRC/agency"
+      cd "$SRC"
       umask 077
       aws ssm get-parameter --region "${region}" --name "${env_parameter}" --with-decryption \
         --query Parameter.Value --output text > .env

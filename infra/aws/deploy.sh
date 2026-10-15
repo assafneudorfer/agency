@@ -78,7 +78,7 @@ write_settings() {
 	ask ADMIN_EMAIL "Admin email (sign-in and Let's Encrypt)"
 	ask AWS_REGION_CHOICE "AWS region" "${AWS_REGION:-us-east-1}"
 	ask SIZE "Instance size: small (t3.medium, for testing) or standard (t3.xlarge)" "small"
-	ask REPO_REF "Git branch to deploy" "claude/project-thread-qpk7ed"
+	ask REPO_REF "Git branch to deploy" "main"
 
 	info "Looking up the Cloudflare zone for $BASE_DOMAIN"
 	local zone_id="" candidate=$BASE_DOMAIN response

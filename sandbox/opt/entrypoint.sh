@@ -14,6 +14,10 @@ if [ ! -f "$WS/package.json" ]; then
 	git commit -q -m "Start from template"
 fi
 cd "$WS"
+# Helpers the platform provides: add any that a workspace made from an older template is missing.
+for helper in lib/agency.ts lib/db.ts lib/user.ts; do
+	[ -f "$WS/$helper" ] || { mkdir -p "$(dirname "$WS/$helper")"; cp "/opt/template/$helper" "$WS/$helper"; }
+done
 [ -d node_modules ] || npm install --no-audit --no-fund
 
 mkdir -p /root/.pi/agent

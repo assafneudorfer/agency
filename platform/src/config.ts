@@ -26,6 +26,8 @@ export const config = {
 	// Host name and port at which containers on the docker network reach this server and Postgres.
 	internalUrl: optional("AGENCY_INTERNAL_URL", "http://platform:8080"),
 	projectDbHost: optional("AGENCY_PROJECT_DB_HOST", "postgres"),
+	// Image with pg_dump and psql, used to copy an app's preview data into its first live database.
+	postgresImage: optional("AGENCY_POSTGRES_IMAGE", "postgres:17.6"),
 	// pi model pattern, for example "anthropic/claude-sonnet-4-5". Empty lets pi choose from available keys.
 	model: process.env.AGENCY_MODEL ?? "",
 	// Names of environment variables forwarded to the coding agent (LLM provider keys).

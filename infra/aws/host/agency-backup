@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Nightly backup of every Agency database (platform state and each app's preview and live data).
+# Keeps the last 7 dumps on the server and, when AGENCY_BACKUP_BUCKET is set, uploads each one to S3,
+# where a lifecycle rule deletes them after the retention period.
+# How to restore: README, "Backups".
+set -euo pipefail
+SRC=/opt/agency-src
+DIR=/var/backups/agency
+KEEP=7
+cd "$SRC"
+BUCKET=$(grep -E '^AGENCY_BACKUP_BUCKET=' .env | cut -d= -f2- || true)
+REGION=$(grep -E '^AGENCY_AWS_REGION=' .env | cut -d= -f2- || true)
+
+# Right after the server starts (a missed run catches up then), Postgres may still be starting.
+for _ in $(seq 1 60); do
+	docker compose exec -T postgres pg_isready -U agency -q 2>/dev/null && break
+	sleep 5
+done
+
+umask 077
+mkdir -p "$DIR"
+STAMP=$(date -u +%Y-%m-%dT%H%M%SZ)
+FILE="$DIR/agency-$STAMP.sql.gz"
+# pg_dumpall includes roles, so a restore brings back every app's database login too.
+docker compose exec -T postgres pg_dumpall -U agency --clean --if-exists | gzip > "$FILE.partial"
+mv "$FILE.partial" "$FILE"
+echo "Wrote $FILE ($(du -h "$FILE" | cut -f1))"
+
+if [ -n "$BUCKET" ]; then
+	aws s3 cp ${REGION:+--region "$REGION"} --only-show-errors "$FILE" "s3://$BUCKET/postgres/$(basename "$FILE")"
+	echo "Uploaded to s3://$BUCKET/postgres/$(basename "$FILE")"
+fi
+
+ls -1t "$DIR"/agency-*.sql.gz | tail -n +$((KEEP + 1)) | xargs -r rm -f

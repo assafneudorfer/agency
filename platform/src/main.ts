@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { streamSSE } from "hono/streaming";
 import { type AgentEvent, bridgeFor, dropBridge } from "./agent.ts";
+import { closeDataPools, DataError, deleteRow, insertRow, listTables, readRows, runSql, updateRow } from "./appdata.ts";
 import {
 	type AppEnv,
 	createUser,
@@ -33,12 +34,14 @@ import { gateway, mcpApp } from "./gateway.ts";
 import {
 	appContainerName,
 	createProject,
+	type DataEnv,
 	deleteProject,
 	ensureSandbox,
 	getProject,
 	listProjects,
 	type Project,
 	sandboxName,
+	sandboxOutdated,
 } from "./projects.ts";
 import { listDeployments, publish, rollback, unpublish } from "./publish.ts";
 import { assertBudget, BudgetError, listUsersWithUsage, parseBudget, setBudget, usageDetail, usageFor } from "./usage.ts";
@@ -63,6 +66,7 @@ async function projectView(project: Project) {
 		appUrl: `${config.scheme}://${appHost(project.slug)}`,
 		sandbox,
 		published: app === "running" && active ? active.version : null,
+		liveDatabase: Boolean(project.live_db_name),
 		agentRunning: bridgeFor(project).running,
 	};
 }
@@ -72,6 +76,7 @@ const app = new Hono<AppEnv>();
 app.onError((error, c) => {
 	// 402: the user's monthly agent budget is used up.
 	if (error instanceof BudgetError) return c.json({ error: error.message, code: "budget" }, 402);
+	if (error instanceof DataError) return c.json({ error: error.message }, 400);
 	console.error(error);
 	return c.json({ error: errorMessage(error) }, 500);
 });
@@ -144,12 +149,18 @@ api.delete("/projects/:id", async (c) => {
 	const project = await loadProject(c.req.param("id"));
 	if (!canManage(c.get("user"), project)) return c.json({ error: "Only the owner or an admin can delete" }, 403);
 	dropBridge(project.id);
+	closeDataPools(project);
 	await deleteProject(project);
 	return c.json({ ok: true });
 });
 
 api.get("/projects/:id/messages", async (c) => {
 	const project = await loadProject(c.req.param("id"));
+	// Opening the builder moves an idle app onto the current sandbox image (its files and data stay).
+	if (!bridgeFor(project).running && (await sandboxOutdated(project))) {
+		dropBridge(project.id);
+		await ensureSandbox(project, { upgrade: true });
+	}
 	return c.json({ messages: await bridgeFor(project).messages(), running: bridgeFor(project).running });
 });
 
@@ -273,6 +284,63 @@ api.put("/projects/:id/file", async (c) => {
 		if (error instanceof FileError) return c.json({ error: error.message }, 400);
 		throw error;
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Data view: the app's own database, preview or live. Anyone can edit the preview's data;
+// changing live data takes the app's owner or an admin, others can only read it.
+
+function dataEnv(value: string | undefined): DataEnv {
+	return value === "live" ? "live" : "preview";
+}
+
+async function dataAccess(c: { get(key: "user"): User; req: { param(name: "id"): string; query(name: string): string | undefined } }) {
+	const project = await loadProject(c.req.param("id"));
+	const env = dataEnv(c.req.query("env"));
+	const canWrite = env === "preview" || canManage(c.get("user"), project);
+	return { project, env, canWrite };
+}
+
+api.get("/projects/:id/data/tables", async (c) => {
+	const { project, env, canWrite } = await dataAccess(c);
+	if (env === "live" && !project.live_db_name) return c.json({ tables: [], canWrite, missing: true });
+	return c.json({ tables: await listTables(project, env), canWrite, missing: false });
+});
+
+api.get("/projects/:id/data/rows", async (c) => {
+	const { project, env } = await dataAccess(c);
+	const table = c.req.query("table") ?? "";
+	return c.json(await readRows(project, env, table, Number(c.req.query("offset")), Number(c.req.query("limit"))));
+});
+
+api.post("/projects/:id/data/rows", async (c) => {
+	const { project, env, canWrite } = await dataAccess(c);
+	if (!canWrite) return c.json({ error: "Only the app's owner or an admin can change live data" }, 403);
+	const body = await c.req.json<{ table: string; values: Record<string, string | null> }>();
+	await insertRow(project, env, body.table, body.values ?? {});
+	return c.json({ ok: true });
+});
+
+api.patch("/projects/:id/data/rows", async (c) => {
+	const { project, env, canWrite } = await dataAccess(c);
+	if (!canWrite) return c.json({ error: "Only the app's owner or an admin can change live data" }, 403);
+	const body = await c.req.json<{ table: string; key: Record<string, unknown>; values: Record<string, string | null> }>();
+	await updateRow(project, env, body.table, body.key ?? {}, body.values ?? {});
+	return c.json({ ok: true });
+});
+
+api.delete("/projects/:id/data/rows", async (c) => {
+	const { project, env, canWrite } = await dataAccess(c);
+	if (!canWrite) return c.json({ error: "Only the app's owner or an admin can change live data" }, 403);
+	const body = await c.req.json<{ table: string; key: Record<string, unknown> }>();
+	await deleteRow(project, env, body.table, body.key ?? {});
+	return c.json({ ok: true });
+});
+
+api.post("/projects/:id/data/sql", async (c) => {
+	const { project, env, canWrite } = await dataAccess(c);
+	const body = await c.req.json<{ sql: string }>();
+	return c.json(await runSql(project, env, String(body.sql ?? ""), !canWrite));
 });
 
 api.get("/projects/:id/deployments", async (c) => {

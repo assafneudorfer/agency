@@ -964,6 +964,7 @@ code {
 
 .builder {
 	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	grid-template-rows: 52px 1fr;
 	height: 100%;
 	min-height: 0;
@@ -1624,6 +1625,207 @@ code {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Data view: the app's own database */
+
+.env-seg {
+	display: grid;
+	width: 100%;
+}
+
+.env-seg button {
+	padding: 0 8px;
+}
+
+.tree-row .count {
+	flex: none;
+	font-size: 11px;
+	color: var(--text-3);
+	font-variant-numeric: tabular-nums;
+}
+
+.empty.small {
+	padding: 24px 12px;
+	font-size: 12.5px;
+	text-align: center;
+}
+
+.banner.warn {
+	background: color-mix(in srgb, var(--warning) 12%, transparent);
+	color: var(--warning);
+}
+
+.banner.subtle {
+	background: var(--bg);
+	color: var(--text-3);
+}
+
+.banner svg.icon {
+	width: 14px;
+	height: 14px;
+	flex: none;
+}
+
+.grid-wrap {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+}
+
+.data-grid {
+	border-collapse: separate;
+	border-spacing: 0;
+	min-width: 100%;
+	font-size: 12.5px;
+	font-variant-numeric: tabular-nums;
+}
+
+.data-grid th,
+.data-grid td {
+	max-width: 320px;
+	height: 32px;
+	padding: 0 12px;
+	border-bottom: 1px solid var(--border);
+	border-right: 1px solid var(--border);
+	text-align: left;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.data-grid th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	height: 40px;
+	background: var(--bg);
+	font-weight: 600;
+	color: var(--text);
+}
+
+.data-grid th .type {
+	display: block;
+	font-size: 10.5px;
+	font-weight: 400;
+	color: var(--text-3);
+}
+
+.data-grid th .pk {
+	margin-left: 6px;
+	padding: 1px 5px;
+	border-radius: 4px;
+	background: var(--accent-soft);
+	color: var(--accent);
+	font-size: 10px;
+	font-weight: 500;
+}
+
+.data-grid td.editable {
+	cursor: text;
+}
+
+.data-grid td.editing {
+	padding: 0;
+	box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.data-grid td.actions,
+.data-grid th.actions {
+	width: 1%;
+	padding: 0 4px;
+	border-right: none;
+}
+
+.data-grid td.actions .icon-btn {
+	opacity: 0;
+	transition: opacity 120ms ease;
+}
+
+.data-grid tr:focus-within td.actions .icon-btn,
+.data-grid td.actions .icon-btn:focus-visible {
+	opacity: 1;
+}
+
+.data-grid tr.adding td {
+	padding: 0;
+	background: var(--accent-soft);
+}
+
+.data-grid tr.adding td.actions {
+	padding: 0 6px;
+}
+
+.data-grid .null {
+	color: var(--text-3);
+	font-style: italic;
+	font-size: 11.5px;
+}
+
+.cell-input {
+	width: 100%;
+	min-width: 80px;
+	height: 32px;
+	padding: 0 12px;
+	border: none;
+	outline: none;
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+}
+
+@media (hover: hover) and (pointer: fine) {
+	.data-grid tbody tr:hover td {
+		background: var(--surface-2);
+	}
+
+	.data-grid tbody tr:hover td.actions .icon-btn {
+		opacity: 1;
+	}
+}
+
+.pager {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 8px 14px;
+	border-top: 1px solid var(--border);
+	font-size: 12px;
+}
+
+.sql-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	max-height: 50%;
+	padding: 10px 14px 14px;
+	border-top: 1px solid var(--border);
+	background: var(--bg);
+	overflow: auto;
+}
+
+.sql-box {
+	display: flex;
+	align-items: flex-end;
+	gap: 8px;
+}
+
+.sql-box textarea {
+	flex: 1;
+	height: auto;
+	min-height: 64px;
+	padding: 8px 10px;
+	font-size: 12.5px;
+	resize: vertical;
+}
+
+.sql-result {
+	overflow: auto;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--surface);
+}
+
+/* ------------------------------------------------------------------------- */
 /* Toasts, after Sonner: enter from below, transitions (not keyframes) so a burst stays smooth. */
 
 .toaster {
@@ -1953,7 +2155,7 @@ code {
 	}
 
 	.workbench {
-		grid-template-columns: 1fr;
+		grid-template-columns: minmax(0, 1fr);
 		grid-template-rows: 1fr 46%;
 	}
 
@@ -1964,7 +2166,7 @@ code {
 	}
 
 	.code {
-		grid-template-columns: 1fr;
+		grid-template-columns: minmax(0, 1fr);
 		grid-template-rows: 34% 1fr;
 	}
 

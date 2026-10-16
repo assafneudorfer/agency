@@ -7,9 +7,14 @@ export interface RunResult {
 }
 
 /** Runs the docker CLI and collects its output. Rejects on a non-zero exit unless allowFailure is set. */
-export function docker(args: string[], options: { allowFailure?: boolean; timeoutMs?: number } = {}): Promise<RunResult> {
+export function docker(
+	args: string[],
+	options: { allowFailure?: boolean; timeoutMs?: number; env?: Record<string, string> } = {},
+): Promise<RunResult> {
 	return new Promise((resolve, reject) => {
-		const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
+		// Extra environment lets `docker run -e NAME` pass secrets without putting them on the command line.
+		const env = options.env ? { ...process.env, ...options.env } : process.env;
+		const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"], env });
 		let stdout = "";
 		let stderr = "";
 		child.stdout.on("data", (chunk) => {
@@ -75,6 +80,13 @@ export async function containerState(name: string): Promise<"running" | "stopped
 	const result = await docker(["inspect", "-f", "{{.State.Running}}", name], { allowFailure: true });
 	if (result.code !== 0) return "missing";
 	return result.stdout.trim() === "true" ? "running" : "stopped";
+}
+
+/** Image ID a container runs, or a tag points to; empty when it does not exist. */
+export async function imageId(target: string, kind: "container" | "image"): Promise<string> {
+	const format = kind === "container" ? "{{.Image}}" : "{{.Id}}";
+	const result = await docker([kind, "inspect", "-f", format, target], { allowFailure: true });
+	return result.code === 0 ? result.stdout.trim() : "";
 }
 
 export function labelArgs(labels: Record<string, string>): string[] {

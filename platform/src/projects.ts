@@ -17,6 +17,12 @@ export interface Project {
 	live_db_password_enc: string | null;
 	// What members other than the owner, admins and listed project members can do with the app.
 	team_access: TeamAccess;
+	// GitHub repository ("owner/name") the app's history is pushed to, if linked.
+	github_repo: string | null;
+	github_branch: string;
+	github_auto_push: boolean;
+	github_pushed_commit: string | null;
+	github_pushed_at: string | null;
 	created_at: string;
 }
 

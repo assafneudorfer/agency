@@ -13,6 +13,8 @@ import {
 	currentUser,
 	ensureAdmin,
 	login,
+	LoginError,
+	loginWithSso,
 	logout,
 	requireAdmin,
 	requireUser,
@@ -50,7 +52,21 @@ import {
 	sandboxName,
 	sandboxOutdated,
 } from "./projects.ts";
+import {
+	autoPush,
+	getGitHub,
+	GitHubError,
+	gitHubView,
+	linkRepository,
+	projectGitHub,
+	pushToGitHub,
+	removeGitHub,
+	saveGitHub,
+	setAutoPush,
+	unlinkRepository,
+} from "./github.ts";
 import { listDeployments, publish, rollback, unpublish } from "./publish.ts";
+import { saveSso, signInOptions, SsoError, ssoFinish, ssoStartUrl, ssoView } from "./sso.ts";
 import { assertBudget, BudgetError, listUsersWithUsage, parseBudget, setBudget, usageDetail, usageFor } from "./usage.ts";
 
 class NotFoundError extends Error {}
@@ -89,6 +105,7 @@ app.onError((error, c) => {
 	if (error instanceof BudgetError) return c.json({ error: error.message, code: "budget" }, 402);
 	if (error instanceof DataError) return c.json({ error: error.message }, 400);
 	if (error instanceof AccessError) return c.json({ error: error.message }, 403);
+	if (error instanceof GitHubError || error instanceof SsoError) return c.json({ error: error.message }, 400);
 	if (error instanceof NotFoundError) return c.json({ error: error.message }, 404);
 	console.error(error);
 	return c.json({ error: errorMessage(error) }, 500);
@@ -117,9 +134,39 @@ app.get("/oauth/callback", async (c) => {
 // ---------------------------------------------------------------------------
 // Session
 
+app.get("/api/sign-in-options", async (c) => c.json(await signInOptions()));
+
+// Single sign-on: the identity provider sends people back to /auth/sso/callback.
+app.get("/auth/sso/start", async (c) => {
+	try {
+		return c.redirect(await ssoStartUrl(safeNext(c.req.query("next"))), 302);
+	} catch (error) {
+		return c.redirect(`/?sso_error=${encodeURIComponent(errorMessage(error))}`, 302);
+	}
+});
+
+app.get("/auth/sso/callback", async (c) => {
+	const fail = (message: string) => c.redirect(`/?sso_error=${encodeURIComponent(message)}`, 302);
+	const error = c.req.query("error_description") ?? c.req.query("error");
+	if (error) return fail(error);
+	try {
+		const { email, name, next } = await ssoFinish(c.req.query("state") ?? "", c.req.query("code") ?? "");
+		await loginWithSso(c, email, name);
+		return c.redirect(next, 302);
+	} catch (err) {
+		return fail(errorMessage(err));
+	}
+});
+
 app.post("/api/login", async (c) => {
 	const body = await c.req.json<{ email: string; password: string; next?: string }>();
-	const user = await login(c, body.email ?? "", body.password ?? "");
+	let user: User | undefined;
+	try {
+		user = await login(c, body.email ?? "", body.password ?? "");
+	} catch (error) {
+		if (error instanceof LoginError) return c.json({ error: error.message }, 403);
+		throw error;
+	}
 	if (!user) return c.json({ error: "Wrong email or password" }, 401);
 	return c.json({ user, next: safeNext(body.next) });
 });
@@ -303,6 +350,7 @@ git diff --cached --quiet || git commit -q -m "Restore ${commit}"
 git rev-parse --short HEAD`;
 	const result = await execIn(sandboxName(project), script);
 	if (result.code !== 0) return c.json({ error: result.stderr || result.stdout }, 400);
+	autoPush(project.id);
 	return c.json({ commit: result.stdout.trim() });
 });
 
@@ -332,7 +380,9 @@ api.put("/projects/:id/file", async (c) => {
 	// The agent commits its whole tree when it settles; a save in the middle of a run would get mixed into it.
 	if (bridgeFor(project).running) return c.json({ error: "The agent is working. Save again when it finishes." }, 409);
 	try {
-		return c.json(await writeFile(project, body.path, body.content));
+		const saved = await writeFile(project, body.path, body.content);
+		autoPush(project.id);
+		return c.json(saved);
 	} catch (error) {
 		if (error instanceof FileError) return c.json({ error: error.message }, 400);
 		throw error;
@@ -426,6 +476,61 @@ api.post("/projects/:id/rollback", async (c) => {
 api.post("/projects/:id/unpublish", async (c) => {
 	const { project } = await projectFor(c, "editor");
 	await unpublish(project);
+	return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub: push an app's code to the organization's GitHub
+
+api.get("/projects/:id/github", async (c) => {
+	const { project, role } = await projectFor(c, "viewer");
+	return c.json({ ...projectGitHub(project, await getGitHub()), canLink: role === "owner", canPush: atLeast(role, "editor") });
+});
+
+api.post("/projects/:id/github/link", async (c) => {
+	const { project } = await projectFor(c, "owner");
+	const body = await c.req.json<{ create?: boolean; repo?: string; branch?: string; private?: boolean; autoPush?: boolean }>();
+	await linkRepository(project, body);
+	const linked = (await getProject(project.id))!;
+	// A new link pushes right away, so the repository shows the app's code.
+	const push = await pushToGitHub(linked).then(
+		() => null,
+		(error) => errorMessage(error),
+	);
+	return c.json({ ...projectGitHub((await getProject(project.id))!, await getGitHub()), pushError: push });
+});
+
+api.patch("/projects/:id/github", async (c) => {
+	const { project } = await projectFor(c, "owner");
+	const body = await c.req.json<{ autoPush?: boolean }>();
+	await setAutoPush(project, Boolean(body.autoPush));
+	return c.json(projectGitHub((await getProject(project.id))!, await getGitHub()));
+});
+
+api.delete("/projects/:id/github", async (c) => {
+	const { project } = await projectFor(c, "owner");
+	await unlinkRepository(project);
+	return c.json(projectGitHub((await getProject(project.id))!, await getGitHub()));
+});
+
+api.post("/projects/:id/github/push", async (c) => {
+	const { project } = await projectFor(c, "editor");
+	if (bridgeFor(project).running) return c.json({ error: "Wait for the agent to finish, then push" }, 409);
+	const body = await c.req.json<{ force?: boolean }>().catch(() => ({ force: false }));
+	return c.json(await pushToGitHub(project, { force: Boolean(body.force) }));
+});
+
+// ---------------------------------------------------------------------------
+// Settings: single sign-on and GitHub (admins)
+
+api.get("/settings", requireAdmin, async (c) => c.json({ sso: await ssoView(), github: await gitHubView(), publicUrl: config.publicUrl }));
+
+api.put("/settings/sso", requireAdmin, async (c) => c.json(await saveSso(await c.req.json())));
+
+api.put("/settings/github", requireAdmin, async (c) => c.json(await saveGitHub(await c.req.json())));
+
+api.delete("/settings/github", requireAdmin, async (c) => {
+	await removeGitHub();
 	return c.json({ ok: true });
 });
 

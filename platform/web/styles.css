@@ -2383,3 +2383,45 @@ code {
 		justify-content: flex-start;
 	}
 }
+
+/* Sign-in options, settings and GitHub */
+
+.divider {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	color: var(--text-3);
+	font-size: 12px;
+}
+
+.divider::before,
+.divider::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: var(--border);
+}
+
+.link-btn.center {
+	justify-content: center;
+	color: var(--text-2);
+	font-size: 13px;
+}
+
+.card-head h2 {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.seg-choice {
+	display: grid;
+	gap: 6px;
+}
+
+.callout .icon {
+	width: 14px;
+	height: 14px;
+	vertical-align: -2px;
+}

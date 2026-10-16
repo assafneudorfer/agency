@@ -116,6 +116,20 @@ begin
 		alter table projects alter column team_access set default 'viewer';
 	end if;
 end $$;
+-- Organization settings edited in the UI (single sign-on, GitHub). Encrypted: they hold client secrets and tokens.
+create table if not exists settings (
+	key text primary key,
+	value_enc text not null,
+	updated_at timestamptz not null default now()
+);
+
+-- The GitHub repository an app's code is pushed to.
+alter table projects add column if not exists github_repo text;
+alter table projects add column if not exists github_branch text not null default 'main';
+alter table projects add column if not exists github_auto_push boolean not null default false;
+alter table projects add column if not exists github_pushed_commit text;
+alter table projects add column if not exists github_pushed_at timestamptz;
+
 create table if not exists project_members (
 	project_id uuid not null references projects(id) on delete cascade,
 	user_id uuid not null references users(id) on delete cascade,

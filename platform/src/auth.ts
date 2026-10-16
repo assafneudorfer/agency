@@ -5,6 +5,7 @@ import { config } from "./config.ts";
 import { hashPassword, randomToken, verifyPassword } from "./crypto.ts";
 import { query, queryOne } from "./db.ts";
 import type { Project } from "./projects.ts";
+import { passwordAllowed } from "./sso.ts";
 
 export interface User {
 	id: string;
@@ -44,16 +45,37 @@ export async function createUser(
 	return user!;
 }
 
+export class LoginError extends Error {}
+
 export async function login(c: Context, email: string, password: string): Promise<User | undefined> {
 	const row = await queryOne<User & { password_hash: string }>(
 		"select id, email, name, role, password_hash from users where email = lower($1)",
 		[email],
 	);
 	if (!row || !verifyPassword(password, row.password_hash)) return undefined;
+	if (!(await passwordAllowed(row.role))) throw new LoginError("Your organization signs in with single sign-on. Use the button above.");
+	const user = { id: row.id, email: row.email, name: row.name, role: row.role };
+	await startSession(c, user.id);
+	return user;
+}
+
+/**
+ * Signs in someone the identity provider vouched for. New people join as members with the default
+ * budget and a random password nobody knows, so they can only come in through SSO.
+ */
+export async function loginWithSso(c: Context, email: string, name: string): Promise<User> {
+	let user = await queryOne<User>("select id, email, name, role from users where email = lower($1)", [email]);
+	if (!user) user = await createUser(email, name, randomToken(), "member");
+	else if (!user.name && name) await query("update users set name = $2 where id = $1", [user.id, name]);
+	await startSession(c, user.id);
+	return user;
+}
+
+async function startSession(c: Context, userId: string): Promise<void> {
 	const id = randomToken();
 	await query("insert into sessions (id, user_id, expires_at) values ($1, $2, now() + make_interval(days => $3))", [
 		id,
-		row.id,
+		userId,
 		SESSION_DAYS,
 	]);
 	// Scoped to the base domain so previews and published apps on subdomains see the same session.
@@ -65,7 +87,6 @@ export async function login(c: Context, email: string, password: string): Promis
 		path: "/",
 		maxAge: SESSION_DAYS * 24 * 3600,
 	});
-	return { id: row.id, email: row.email, name: row.name, role: row.role };
 }
 
 export async function logout(c: Context): Promise<void> {

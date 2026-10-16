@@ -18,7 +18,7 @@ One-click publish to `<app>.<domain>` with versioned images and rollback, team l
 
 Name, logo, landing page and a template gallery, with assets made in Higgsfield.
 
-## Next feature: SSO restricted to the organization
+## SSO restricted to the organization (implemented)
 
 Replace email and password sign-in with the organization's identity provider so only the organization's people can reach the platform, previews and published apps.
 

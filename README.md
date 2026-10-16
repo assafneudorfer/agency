@@ -110,9 +110,17 @@ Every app has an owner (whoever created it); admins can do everything with every
 
 New apps start as view-only for the team; apps created before sharing existed stay editable by everyone. Traefik's sign-in check enforces the same rules on `<app>.<domain>` and `<app>-preview.<domain>`, and passes the role to apps as `X-Agency-App-Role` (`currentUser().appRole`).
 
+## Single sign-on
+
+Under **Settings**, an admin connects the organization's identity provider over OpenID Connect (Google Workspace, Microsoft Entra ID, Okta, or any other): issuer URL, client ID and secret, and the email domains that may sign in. Register `https://<your-domain>/auth/sso/callback` as the redirect URI. Only people whose verified email is in an allowed domain get in; they join as members on their first sign-in, with the default budget. Password sign-in can stay on for admins only, as a way in if the provider is down. The same session covers previews and published apps.
+
+## GitHub
+
+Under **Settings**, an admin saves a GitHub token (a fine-grained token owned by the organization, with Contents and Administration read and write) and the organization's name; GitHub Enterprise Server works with its API URL. In the builder, the **GitHub** button links the app to a new private repository or an existing one and pushes its version history; it can push every new version automatically. The token stays in the platform: the app's history is copied out of the sandbox as a git bundle and pushed from the platform container. A branch with commits made outside Agency is not overwritten unless someone chooses **Overwrite**.
+
 ## Security notes for this MVP
 
 - The platform container mounts the Docker socket, which is root-equivalent on the host. Keep the host dedicated to Agency.
 - LLM keys are passed to pi with `docker exec -e` for each session, so they are visible inside sandboxes while the agent runs, never in published apps.
-- All signed-in members see the list of connections (never their credentials). SSO is planned.
+- All signed-in members see the list of connections (never their credentials).
 - The user headers are trustworthy for requests that come through Traefik. Containers on the internal Docker network (sandboxes included) can reach app containers directly and could set them, so don't base admin-only actions in apps on them alone until sandboxes get an egress allowlist.

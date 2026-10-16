@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/brand/logo.svg" width="96" height="96" alt="Agency logo" /></p>
+<p align="center"><img src="docs/brand/logo.png" width="96" height="96" alt="Agency logo" /></p>
 
 # Agency
 

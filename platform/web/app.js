@@ -310,7 +310,7 @@ function Login({ onLogin }) {
 	return html`<div class="login">
 		<form class="card stack" onSubmit=${submit}>
 			<div>
-				<div class="brand"><img src="/static/logo.svg" alt="" /> <b>Agency</b></div>
+				<div class="brand"><img src="/static/logo.png" alt="" /> <b>Agency</b></div>
 				<h1>Welcome back</h1>
 				<p class="lead">Sign in to build with your team's data.</p>
 			</div>
@@ -1256,7 +1256,7 @@ function App() {
 	if (route.startsWith("/p/")) return html`<main class="main full">${view}</main><${Toaster} />`;
 	return html`<div class="app">
 			<nav class="nav">
-				<a class="brand" href="#/"><img src="/static/logo.svg" alt="" /> <b>Agency</b></a>
+				<a class="brand" href="#/"><img src="/static/logo.png" alt="" /> <b>Agency</b></a>
 				${link("#/", "Apps", "apps")} ${link("#/connections", "Connections", "database")}
 				${user.role === "admin" && link("#/team", "Team", "users")}
 				<span class="spacer"></span>

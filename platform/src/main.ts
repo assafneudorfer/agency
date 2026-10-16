@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { streamSSE } from "hono/streaming";
 import { type AgentEvent, bridgeFor, dropBridge } from "./agent.ts";
 import {
@@ -27,6 +28,7 @@ import {
 } from "./connectors.ts";
 import { migrate, query } from "./db.ts";
 import { containerState, execIn } from "./docker.ts";
+import { FileError, listFiles, readFile, writeFile } from "./files.ts";
 import { gateway, mcpApp } from "./gateway.ts";
 import {
 	appContainerName,
@@ -230,6 +232,39 @@ git rev-parse --short HEAD`;
 	return c.json({ commit: result.stdout.trim() });
 });
 
+// ---------------------------------------------------------------------------
+// Code view: the app's source files inside its sandbox
+
+api.get("/projects/:id/files", async (c) => {
+	const project = await loadProject(c.req.param("id"));
+	await ensureSandbox(project);
+	return c.json({ files: await listFiles(project) });
+});
+
+api.get("/projects/:id/file", async (c) => {
+	const project = await loadProject(c.req.param("id"));
+	try {
+		return c.json(await readFile(project, c.req.query("path") ?? ""));
+	} catch (error) {
+		if (error instanceof FileError) return c.json({ error: error.message }, 400);
+		throw error;
+	}
+});
+
+api.put("/projects/:id/file", async (c) => {
+	const project = await loadProject(c.req.param("id"));
+	const body = await c.req.json<{ path: string; content: string }>();
+	if (typeof body.content !== "string") return c.json({ error: "Content is required" }, 400);
+	// The agent commits its whole tree when it settles; a save in the middle of a run would get mixed into it.
+	if (bridgeFor(project).running) return c.json({ error: "The agent is working. Save again when it finishes." }, 409);
+	try {
+		return c.json(await writeFile(project, body.path, body.content));
+	} catch (error) {
+		if (error instanceof FileError) return c.json({ error: error.message }, 400);
+		throw error;
+	}
+});
+
 api.get("/projects/:id/deployments", async (c) => {
 	const project = await loadProject(c.req.param("id"));
 	return c.json(await listDeployments(project));
@@ -339,6 +374,26 @@ app.get(
 	serveStatic({ root: config.nodeModules, rewriteRequestPath: (p) => p.replace("/vendor/hooks", "preact/hooks/dist") }),
 );
 app.get("/vendor/htm/*", serveStatic({ root: config.nodeModules, rewriteRequestPath: (p) => p.replace("/vendor/htm", "htm/dist") }));
+// ES modules for the code editor (CodeMirror), resolved to each package's entry file. Only these packages are served.
+const ESM_PACKAGES = /^(codemirror|style-mod|w3c-keyname|crelt|@codemirror\/[a-z-]+|@lezer\/[a-z-]+|@marijn\/find-cluster-break)$/;
+const esmEntries = new Map<string, string>();
+app.use("/vendor/*", compress());
+app.get("/vendor/esm/*", (c) => {
+	const name = c.req.path.slice("/vendor/esm/".length);
+	if (!ESM_PACKAGES.test(name)) return c.notFound();
+	let file = esmEntries.get(name);
+	if (!file) {
+		const dir = `${config.nodeModules}${name}/`;
+		if (!existsSync(`${dir}package.json`)) return c.notFound();
+		const pkg = JSON.parse(readFileSync(`${dir}package.json`, "utf8"));
+		const entry = pkg.exports?.["."]?.import ?? pkg.exports?.import ?? pkg.module ?? pkg.main ?? "index.js";
+		file = `${dir}${typeof entry === "string" ? entry : entry.default}`;
+		esmEntries.set(name, file);
+	}
+	c.header("Content-Type", "text/javascript; charset=utf-8");
+	c.header("Cache-Control", "public, max-age=86400");
+	return c.body(readFileSync(file, "utf8"));
+});
 app.get("/static/*", serveStatic({ root: config.webRoot, rewriteRequestPath: (p) => p.replace("/static", "") }));
 const indexHtml = readFileSync(`${config.webRoot}index.html`, "utf8");
 app.get("*", (c) => c.html(indexHtml));

@@ -3,6 +3,8 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="theme-color" content="#fafafb" media="(prefers-color-scheme: light)" />
+		<meta name="theme-color" content="#0b0b0e" media="(prefers-color-scheme: dark)" />
 		<title>Agency</title>
 		<link rel="icon" href="/static/logo.svg" type="image/svg+xml" />
 		<link rel="stylesheet" href="/static/styles.css" />
@@ -11,7 +13,14 @@
 				"imports": {
 					"preact": "/vendor/preact/preact.mjs",
 					"preact/hooks": "/vendor/hooks/hooks.mjs",
-					"htm": "/vendor/htm/htm.mjs"
+					"htm": "/vendor/htm/htm.mjs",
+					"codemirror": "/vendor/esm/codemirror",
+					"@codemirror/": "/vendor/esm/@codemirror/",
+					"@lezer/": "/vendor/esm/@lezer/",
+					"@marijn/": "/vendor/esm/@marijn/",
+					"style-mod": "/vendor/esm/style-mod",
+					"w3c-keyname": "/vendor/esm/w3c-keyname",
+					"crelt": "/vendor/esm/crelt"
 				}
 			}
 		</script>

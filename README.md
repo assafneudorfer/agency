@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/logo.svg" width="96" height="96" alt="Agency logo" /></p>
+
 # Agency
 
 A self-hosted app builder for an organization's team, built on the [pi](https://github.com/earendil-works/pi) coding agent. Someone describes an app in plain language, pi builds it as a Next.js project in a sandbox container, the live preview updates beside the chat, and one click publishes it to `https://<app>.<your-domain>`. Apps read the organization's data (Postgres, Supabase, AWS RDS, and MCP connectors such as Google Drive, Monday or Salesforce) through a gateway, so credentials never enter app code.

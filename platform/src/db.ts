@@ -61,6 +61,31 @@ create table if not exists deployments (
 	active boolean not null default false,
 	unique (project_id, version)
 );
+
+-- Monthly spend limit per user. Admins existing before budgets were added start unlimited.
+do $$
+begin
+	if not exists (select 1 from information_schema.columns where table_name = 'users' and column_name = 'unlimited') then
+		alter table users add column unlimited boolean not null default false;
+		alter table users add column monthly_budget_usd numeric(12, 2) not null default 20;
+		update users set unlimited = true where role = 'admin';
+	end if;
+end $$;
+
+-- One row per finished assistant message of the coding agent, attributed to the user who prompted it.
+create table if not exists usage_events (
+	id bigserial primary key,
+	user_id uuid not null references users(id) on delete cascade,
+	project_id uuid references projects(id) on delete set null,
+	model text not null default '',
+	input_tokens integer not null default 0,
+	output_tokens integer not null default 0,
+	cache_read_tokens integer not null default 0,
+	cache_write_tokens integer not null default 0,
+	cost_usd numeric(14, 6) not null default 0,
+	created_at timestamptz not null default now()
+);
+create index if not exists usage_events_user_time on usage_events (user_id, created_at);
 `;
 
 export async function migrate(): Promise<void> {

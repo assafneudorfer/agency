@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { config } from "./config.ts";
 import { execIn, spawnDocker } from "./docker.ts";
 import { ensureSandbox, type Project, sandboxName } from "./projects.ts";
+import { recordUsage } from "./usage.ts";
 
 export type AgentEvent = { type: string; [key: string]: unknown };
 type Listener = (event: AgentEvent) => void;
@@ -26,6 +27,8 @@ export class AgentBridge {
 	private readonly pending = new Map<string, Pending>();
 	private readonly listeners = new Set<Listener>();
 	running = false;
+	// The user whose prompt the agent is working on; the cost of each assistant message is charged to them.
+	private promptedBy: string | undefined;
 
 	constructor(project: Project) {
 		this.project = project;
@@ -111,11 +114,20 @@ export class AgentBridge {
 			return;
 		}
 		if (record.type === "agent_start") this.running = true;
+		if (record.type === "message_end") this.chargeUsage(record.message);
 		this.emit(record);
 		if (record.type === "agent_settled") {
 			this.running = false;
 			void this.commit();
 		}
+	}
+
+	private chargeUsage(message: unknown): void {
+		const msg = message as { role?: string } | undefined;
+		if (msg?.role !== "assistant" || !this.promptedBy) return;
+		recordUsage(this.promptedBy, this.project.id, msg).catch((error) =>
+			console.error(`[agent ${this.project.slug}] could not record usage: ${error instanceof Error ? error.message : error}`),
+		);
 	}
 
 	async request<T = unknown>(command: Record<string, unknown>, timeoutMs = 60_000): Promise<T> {
@@ -131,7 +143,8 @@ export class AgentBridge {
 		});
 	}
 
-	prompt(message: string): Promise<unknown> {
+	prompt(message: string, userId: string): Promise<unknown> {
+		this.promptedBy = userId;
 		return this.request({
 			type: "prompt",
 			message,

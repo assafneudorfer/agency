@@ -41,6 +41,7 @@ import {
 	sandboxName,
 } from "./projects.ts";
 import { listDeployments, publish, rollback, unpublish } from "./publish.ts";
+import { assertBudget, BudgetError, listUsersWithUsage, parseBudget, setBudget, usageDetail, usageFor } from "./usage.ts";
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -69,6 +70,8 @@ async function projectView(project: Project) {
 const app = new Hono<AppEnv>();
 
 app.onError((error, c) => {
+	// 402: the user's monthly agent budget is used up.
+	if (error instanceof BudgetError) return c.json({ error: error.message, code: "budget" }, 402);
 	console.error(error);
 	return c.json({ error: errorMessage(error) }, 500);
 });
@@ -96,7 +99,11 @@ app.post("/api/logout", async (c) => {
 const api = new Hono<AppEnv>();
 api.use("*", requireUser);
 
-api.get("/me", (c) => c.json({ user: c.get("user"), baseDomain: config.baseDomain }));
+api.get("/me", async (c) =>
+	c.json({ user: c.get("user"), baseDomain: config.baseDomain, usage: await usageFor(c.get("user").id) }),
+);
+
+api.get("/usage", async (c) => c.json(await usageDetail(c.get("user").id)));
 
 // ---------------------------------------------------------------------------
 // Projects
@@ -120,10 +127,12 @@ api.post("/projects", async (c) => {
 	const body = await c.req.json<{ name: string; prompt?: string }>();
 	const name = (body.name ?? "").trim();
 	if (!name) return c.json({ error: "Name is required" }, 400);
-	const project = await createProject(name, c.get("user").id);
+	const user = c.get("user");
+	if (body.prompt?.trim()) await assertBudget(user.id);
+	const project = await createProject(name, user.id);
 	if (body.prompt?.trim()) {
 		bridgeFor(project)
-			.prompt(body.prompt.trim())
+			.prompt(body.prompt.trim(), user.id)
 			.catch((error) => console.error(`[agent ${project.slug}] first prompt failed: ${errorMessage(error)}`));
 	}
 	return c.json(await projectView(project), 201);
@@ -148,7 +157,8 @@ api.post("/projects/:id/prompt", async (c) => {
 	const project = await loadProject(c.req.param("id"));
 	const body = await c.req.json<{ message: string }>();
 	if (!body.message?.trim()) return c.json({ error: "Message is empty" }, 400);
-	return c.json(await bridgeFor(project).prompt(body.message.trim()));
+	await assertBudget(c.get("user").id);
+	return c.json(await bridgeFor(project).prompt(body.message.trim(), c.get("user").id));
 });
 
 api.post("/projects/:id/abort", async (c) => {
@@ -341,20 +351,38 @@ api.delete("/connections/:id", requireAdmin, async (c) => {
 // ---------------------------------------------------------------------------
 // Team
 
-api.get("/users", requireAdmin, async (c) =>
-	c.json(await query("select id, email, name, role, created_at from users order by created_at")),
-);
+api.get("/users", requireAdmin, async (c) => c.json(await listUsersWithUsage()));
 
 api.post("/users", requireAdmin, async (c) => {
-	const body = await c.req.json<{ email: string; name?: string; password: string; role?: User["role"] }>();
+	const body = await c.req.json<{
+		email: string;
+		name?: string;
+		password: string;
+		role?: User["role"];
+		budgetUsd?: number | string;
+		unlimited?: boolean;
+	}>();
 	if (!body.email || !body.password || body.password.length < 10) {
 		return c.json({ error: "Email and a password of at least 10 characters are required" }, 400);
 	}
 	try {
-		return c.json(await createUser(body.email, body.name ?? "", body.password, body.role === "admin" ? "admin" : "member"), 201);
+		const budget = { budgetUsd: parseBudget(body.budgetUsd), unlimited: Boolean(body.unlimited) };
+		const role = body.role === "admin" ? "admin" : "member";
+		return c.json(await createUser(body.email, body.name ?? "", body.password, role, budget), 201);
 	} catch (error) {
 		return c.json({ error: errorMessage(error) }, 400);
 	}
+});
+
+api.patch("/users/:id/budget", requireAdmin, async (c) => {
+	const body = await c.req.json<{ budgetUsd?: number | string; unlimited?: boolean }>();
+	try {
+		const unlimited = typeof body.unlimited === "boolean" ? body.unlimited : undefined;
+		await setBudget(c.req.param("id"), parseBudget(body.budgetUsd), unlimited);
+	} catch (error) {
+		return c.json({ error: errorMessage(error) }, 400);
+	}
+	return c.json(await usageFor(c.req.param("id")));
 });
 
 api.delete("/users/:id", requireAdmin, async (c) => {

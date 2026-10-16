@@ -33,6 +33,8 @@ export const config = {
 		.split(",")
 		.map((name) => name.trim())
 		.filter(Boolean),
+	// Monthly agent budget in US dollars for newly added members. Admins can change it per user.
+	defaultBudgetUsd: Number(optional("AGENCY_DEFAULT_BUDGET_USD", "20")),
 	sandboxMemory: optional("AGENCY_SANDBOX_MEMORY", "3g"),
 	sandboxCpus: optional("AGENCY_SANDBOX_CPUS", "2"),
 	appMemory: optional("AGENCY_APP_MEMORY", "512m"),

@@ -23,14 +23,21 @@ export async function ensureAdmin(): Promise<void> {
 		console.warn("No users exist. Set AGENCY_ADMIN_EMAIL and AGENCY_ADMIN_PASSWORD to create the first admin.");
 		return;
 	}
-	await createUser(config.adminEmail, "Admin", config.adminPassword, "admin");
+	await createUser(config.adminEmail, "Admin", config.adminPassword, "admin", { unlimited: true });
 	console.log(`Created admin user ${config.adminEmail}`);
 }
 
-export async function createUser(email: string, name: string, password: string, role: User["role"]): Promise<User> {
+export async function createUser(
+	email: string,
+	name: string,
+	password: string,
+	role: User["role"],
+	budget: { budgetUsd?: number; unlimited?: boolean } = {},
+): Promise<User> {
 	const user = await queryOne<User>(
-		"insert into users (email, name, password_hash, role) values (lower($1), $2, $3, $4) returning id, email, name, role",
-		[email, name, hashPassword(password), role],
+		`insert into users (email, name, password_hash, role, monthly_budget_usd, unlimited)
+		 values (lower($1), $2, $3, $4, $5, $6) returning id, email, name, role`,
+		[email, name, hashPassword(password), role, budget.budgetUsd ?? config.defaultBudgetUsd, budget.unlimited ?? false],
 	);
 	return user!;
 }

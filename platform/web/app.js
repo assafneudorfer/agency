@@ -186,6 +186,8 @@ const ICONS = {
 	search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
 	alert: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
 	plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+	gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+	infinity: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4z"/>',
 };
 
 function icon(name, className = "") {
@@ -216,6 +218,28 @@ function hueOf(text) {
 	let hash = 0;
 	for (const char of text) hash = (hash * 31 + char.charCodeAt(0)) % 360;
 	return hash;
+}
+
+function money(value) {
+	const digits = value > 0 && value < 1 ? 3 : 2;
+	return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: digits })}`;
+}
+
+function shortDate(value) {
+	return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+/** A thin bar of spend against budget. Turns amber past 80% and red when the budget is used up. */
+function Meter({ spent, budget, unlimited }) {
+	const ratio = unlimited ? 0 : budget > 0 ? Math.min(1, spent / budget) : 1;
+	const level = unlimited ? "" : ratio >= 1 ? "over" : ratio >= 0.8 ? "near" : "";
+	return html`<div class=${`meter ${level}`} role="meter" aria-valuemin="0" aria-valuemax=${budget} aria-valuenow=${spent}>
+		<span style=${`transform:scaleX(${ratio})`}></span>
+	</div>`;
+}
+
+function spendLabel(usage) {
+	return usage.unlimited ? `${money(usage.spentUsd)} · unlimited` : `${money(usage.spentUsd)} of ${money(usage.budgetUsd)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1149,54 +1173,195 @@ function Connections({ user }) {
 	</div>`;
 }
 
-function Team({ user }) {
+function UsagePage() {
+	const [usage, setUsage] = useState(null);
+	const [error, setError] = useState("");
+	useEffect(() => {
+		api("/usage").then(setUsage, (err) => setError(err.message));
+	}, []);
+	if (!usage) {
+		return html`<div class="page">${error ? html`<p class="error">${error}</p>` : html`<div class="empty"><span class="spinner"></span></div>`}</div>`;
+	}
+	// One bar per day of the month so far, scaled to the busiest day.
+	const days = [];
+	const start = new Date(usage.periodStart);
+	const today = new Date();
+	for (let d = new Date(start); d <= today; d.setUTCDate(d.getUTCDate() + 1)) days.push(d.toISOString().slice(0, 10));
+	const byDay = Object.fromEntries(usage.byDay.map((d) => [d.day, d.costUsd]));
+	const peak = Math.max(0.0001, ...usage.byDay.map((d) => d.costUsd));
+	const out = !usage.unlimited && usage.spentUsd >= usage.budgetUsd;
+	return html`<div class="page">
+		<header class="page-head">
+			<h1>Usage</h1>
+			<p>What the AI agent has cost while building your apps this month. Your admin sets the budget.</p>
+		</header>
+		<div class="stack">
+			<div class="card usage-hero">
+				<div class="card-body">
+					<div class="usage-figures">
+						<div>
+							<div class="label">Spent this month</div>
+							<div class="amount">${money(usage.spentUsd)}</div>
+						</div>
+						<div class="right">
+							<div class="label">${usage.unlimited ? "Budget" : "Remaining"}</div>
+							<div class="amount soft">
+								${usage.unlimited ? html`${icon("infinity")} Unlimited` : money(usage.remainingUsd)}
+							</div>
+						</div>
+					</div>
+					<${Meter} spent=${usage.spentUsd} budget=${usage.budgetUsd} unlimited=${usage.unlimited} />
+					<div class="usage-foot">
+						<span>${usage.unlimited ? "No monthly limit" : `Monthly budget ${money(usage.budgetUsd)}`}</span>
+						<span>Resets ${shortDate(usage.resetsAt)}</span>
+					</div>
+					${out &&
+					html`<p class="notice danger">${icon("alert")} You have used this month's budget. Ask an admin to raise it to keep building.</p>`}
+				</div>
+			</div>
+			<div class="card">
+				<div class="card-head"><h2>By day</h2></div>
+				<div class="card-body">
+					<div class="spark" aria-label="Spend per day">
+						${days.map(
+							(day) => html`<div class="spark-col" title=${`${shortDate(day)}: ${money(byDay[day] ?? 0)}`}>
+								<span style=${`transform:scaleY(${(byDay[day] ?? 0) / peak})`}></span>
+							</div>`,
+						)}
+					</div>
+					<div class="usage-foot"><span>${shortDate(usage.periodStart)}</span><span>Today</span></div>
+				</div>
+			</div>
+			<div class="card">
+				<div class="card-head"><h2>By app</h2></div>
+				${usage.byProject.length === 0
+					? html`<div class="card-body faint">Nothing yet this month.</div>`
+					: usage.byProject.map(
+							(p) => html`<div class="list-row">
+								<div class="grow">
+									<div class="title">
+										${p.projectId ? html`<a href=${`#/p/${p.projectId}`}>${p.name}</a>` : html`<span class="faint">${p.name}</span>`}
+									</div>
+									<div class="sub">${p.messages} agent ${p.messages === 1 ? "step" : "steps"}</div>
+								</div>
+								<span class="mono">${money(p.costUsd)}</span>
+							</div>`,
+						)}
+			</div>
+		</div>
+	</div>`;
+}
+
+function BudgetEditor({ member, onSaved, onCancel }) {
+	const [budget, setBudget] = useState(String(member.budgetUsd));
+	const [unlimited, setUnlimited] = useState(member.unlimited);
+	const [busy, setBusy] = useState(false);
+	const save = async (e) => {
+		e.preventDefault();
+		setBusy(true);
+		try {
+			await api(`/users/${member.id}/budget`, { method: "PATCH", body: { budgetUsd: budget, unlimited } });
+			toast(`Updated the budget for ${member.email}`);
+			onSaved();
+		} catch (err) {
+			toast(err.message, "error");
+			setBusy(false);
+		}
+	};
+	return html`<form class="budget-editor" onSubmit=${save}>
+		<label class="money-input" aria-disabled=${unlimited}>
+			<span>$</span>
+			<input
+				class="input"
+				type="number"
+				min="0"
+				step="1"
+				inputmode="decimal"
+				aria-label="Monthly budget in dollars"
+				value=${budget}
+				disabled=${unlimited}
+				onInput=${(e) => setBudget(e.target.value)}
+				autofocus
+			/>
+			<span class="faint">/ month</span>
+		</label>
+		<label class="check"><input type="checkbox" checked=${unlimited} onChange=${(e) => setUnlimited(e.target.checked)} /> Unlimited</label>
+		<span class="grow"></span>
+		<button type="button" class="btn sm" onClick=${onCancel}>Cancel</button>
+		<button class="btn primary sm" disabled=${busy}>Save</button>
+	</form>`;
+}
+
+const EMPTY_MEMBER = { email: "", name: "", password: "", role: "member", budgetUsd: "", unlimited: false };
+
+function Team({ user, onChange }) {
 	const [users, setUsers] = useState([]);
-	const [form, setForm] = useState({ email: "", name: "", password: "", role: "member" });
+	const [form, setForm] = useState(EMPTY_MEMBER);
+	const [editing, setEditing] = useState(null);
 	const [error, setError] = useState("");
 	const load = () => api("/users").then(setUsers, (err) => setError(err.message));
 	useEffect(() => {
 		load();
 	}, []);
-	const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
+	const set = (key) => (e) => setForm({ ...form, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
 	const add = async (e) => {
 		e.preventDefault();
 		setError("");
 		try {
 			await api("/users", { method: "POST", body: form });
 			toast(`Added ${form.email}`);
-			setForm({ email: "", name: "", password: "", role: "member" });
+			setForm(EMPTY_MEMBER);
 			load();
 		} catch (err) {
 			setError(err.message);
 		}
 	};
 	if (user.role !== "admin") return html`<div class="page"><div class="empty">${icon("lock")} Only admins manage the team.</div></div>`;
+	const total = users.reduce((sum, u) => sum + u.spentUsd, 0);
 	return html`<div class="page">
 		<header class="page-head">
 			<h1>Team</h1>
-			<p>People who can sign in, build apps and open published apps.</p>
+			<p>People who can sign in, build apps and open published apps, and what each may spend on the AI agent per month.</p>
 		</header>
 		<div class="stack">
 			<div class="card">
+				<div class="card-head row">
+					<h2 class="grow">Members</h2>
+					<span class="muted" style="font-size:13px">${money(total)} spent this month</span>
+				</div>
 				${users.map(
-					(u) => html`<div class="list-row">
+					(u) => html`<div class="list-row member-row">
 						<span class="avatar">${(u.name || u.email).slice(0, 1)}</span>
 						<div class="grow">
-							<div class="title">${u.name || u.email}</div>
+							<div class="title">${u.name || u.email} <span class="badge">${u.role}</span></div>
 							${u.name && html`<div class="sub">${u.email}</div>`}
 						</div>
-						<span class="badge">${u.role}</span>
-						${u.id !== user.id &&
-						html`<button
-							class="btn sm danger"
-							onClick=${async () => {
-								if (!confirm(`Remove ${u.email}?`)) return;
-								await api(`/users/${u.id}`, { method: "DELETE" });
-								load();
-							}}
-						>
-							Remove
-						</button>`}
+						${editing === u.id
+							? html`<${BudgetEditor}
+									member=${u}
+									onCancel=${() => setEditing(null)}
+									onSaved=${() => {
+										setEditing(null);
+										load();
+										if (u.id === user.id) onChange?.();
+									}}
+								/>`
+							: html`<div class="member-usage">
+										<div class="row"><span class="mono">${spendLabel(u)}</span></div>
+										<${Meter} spent=${u.spentUsd} budget=${u.budgetUsd} unlimited=${u.unlimited} />
+									</div>
+									<button class="btn sm" onClick=${() => setEditing(u.id)}>Budget</button>
+									${u.id !== user.id &&
+									html`<button
+										class="btn sm danger"
+										onClick=${async () => {
+											if (!confirm(`Remove ${u.email}?`)) return;
+											await api(`/users/${u.id}`, { method: "DELETE" });
+											load();
+										}}
+									>
+										Remove
+									</button>`}`}
 					</div>`,
 				)}
 			</div>
@@ -1216,6 +1381,21 @@ function Team({ user }) {
 							<option value="admin">Admin</option>
 						</select>
 					</label>
+					<label class="field">
+						<span>Monthly budget <span class="hint">US dollars, empty for the default</span></span>
+						<input
+							class="input"
+							type="number"
+							min="0"
+							step="1"
+							inputmode="decimal"
+							placeholder="20"
+							value=${form.budgetUsd}
+							disabled=${form.unlimited}
+							onInput=${set("budgetUsd")}
+						/>
+					</label>
+					<label class="check field-check"><input type="checkbox" checked=${form.unlimited} onChange=${set("unlimited")} /> Unlimited budget</label>
 					${error && html`<div class="error wide">${error}</div>`}
 				</div>
 				<div class="card-foot"><button class="btn primary">${icon("plus")} Add member</button></div>
@@ -1226,13 +1406,18 @@ function Team({ user }) {
 
 function App() {
 	const [user, setUser] = useState(undefined);
+	const [usage, setUsage] = useState(null);
 	const route = useRoute();
+	const refreshUsage = () => api("/me").then((data) => setUsage(data.usage), () => {});
 	useEffect(() => {
 		api("/me").then(
 			(data) => {
 				const next = new URLSearchParams(location.search).get("next");
 				if (next) location.href = next;
-				else setUser(data.user);
+				else {
+					setUser(data.user);
+					setUsage(data.usage);
+				}
 			},
 			() => setUser(null),
 		);
@@ -1242,9 +1427,14 @@ function App() {
 		const project = /^\/p\/([0-9a-f-]+)/.exec(route);
 		if (project) return html`<${Builder} id=${project[1]} />`;
 		if (route.startsWith("/connections")) return html`<${Connections} user=${user} />`;
-		if (route.startsWith("/team")) return html`<${Team} user=${user} />`;
+		if (route.startsWith("/team")) return html`<${Team} user=${user} onChange=${refreshUsage} />`;
+		if (route.startsWith("/usage")) return html`<${UsagePage} />`;
 		return html`<${Home} />`;
 	}, [route, user]);
+	// Spend changes as the agent works, so the sidebar meter refreshes on every navigation.
+	useEffect(() => {
+		if (user) refreshUsage();
+	}, [route]);
 	if (user === undefined) return null;
 	if (user === null) return html`<${Login} onLogin=${setUser} /><${Toaster} />`;
 	const link = (href, label, iconName) => {
@@ -1258,8 +1448,13 @@ function App() {
 			<nav class="nav">
 				<a class="brand" href="#/"><img src="/static/logo.png" alt="" /> <b>Agency</b></a>
 				${link("#/", "Apps", "apps")} ${link("#/connections", "Connections", "database")}
-				${user.role === "admin" && link("#/team", "Team", "users")}
+				${link("#/usage", "Usage", "gauge")} ${user.role === "admin" && link("#/team", "Team", "users")}
 				<span class="spacer"></span>
+				${usage &&
+				html`<a class="usage-chip" href="#/usage" title="Your AI usage this month">
+					<div class="row"><span class="grow">AI usage</span><span class="mono">${spendLabel(usage)}</span></div>
+					<${Meter} spent=${usage.spentUsd} budget=${usage.budgetUsd} unlimited=${usage.unlimited} />
+				</a>`}
 				<div class="account">
 					<span class="avatar">${(user.name || user.email).slice(0, 1)}</span>
 					<span class="who" title=${user.email}>${user.email}</span>

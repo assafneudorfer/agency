@@ -88,14 +88,31 @@ Under **Connections**, an admin picks a type and gives it a short name that code
 | Postgres | Postgres | Connection string; use a read-only database role |
 | Supabase | Supabase | Session pooler connection string from Project Settings > Database |
 | AWS RDS / Aurora Postgres | AWS RDS | Endpoint connection string; allow the EC2 security group in the RDS security group |
-| Monday, Salesforce, Google Drive, other SaaS | MCP server (URL) | The vendor's streamable HTTP MCP endpoint and an `Authorization` header |
+| Google Drive and Sheets | Google Drive and Sheets (built in) | Client ID and secret of a Google Cloud OAuth client (Web application), then **Connect** |
+| Salesforce | Salesforce (built in) | Consumer key (and secret) of an External Client App or Connected App, then **Connect** |
+| monday.com, Notion, Linear | Their template | Nothing: **Connect** signs in to the vendor's MCP server (monday.com also takes an API token) |
+| Other SaaS with an MCP server | Other MCP server (URL) | The streamable HTTP MCP endpoint, then either OAuth sign-in or an `Authorization` header |
 | Any MCP server published on npm | MCP server (command) | For example `npx -y <package>` plus its environment variables |
 
-Connections are read-only by default. For MCP connectors, tools whose names start with create, update, delete, send and similar verbs are refused unless writes are allowed.
+Connections that sign in show the redirect URI to register with the provider: `https://<your-domain>/oauth/callback`. The admin who clicks **Connect** signs in once for the whole organization, so use an account (ideally a read-only integration user) whose data every app may see. Tokens are stored encrypted and refreshed automatically. For MCP servers the platform follows the MCP authorization spec: it discovers the authorization server and registers itself, so a client ID is only needed for servers that don't allow dynamic registration.
+
+Connections are read-only by default. Built-in connectors mark which tools change data; for MCP connectors, tools whose names start with create, update, delete, send, append and similar verbs are refused unless writes are allowed. For Google Drive the choice also decides the scopes requested at sign-in.
+
+Each connection is available to all apps, or only to the apps an admin picks (the link under the connection). The agent and the gateway only see the connections shared with their app.
+
+## Sharing apps
+
+Every app has an owner (whoever created it); admins can do everything with every app. In the builder's **Share** sheet the owner picks what the rest of the team gets (nothing, view, or edit) and adds people as viewers or editors:
+
+- **Viewer**: opens the preview and the published app, and reads the builder (chat, code, data) without changing anything.
+- **Editor**: also chats with the agent, edits code and preview data, restores versions and publishes.
+- **Owner and admins**: also change live data, sharing and delete the app.
+
+New apps start as view-only for the team; apps created before sharing existed stay editable by everyone. Traefik's sign-in check enforces the same rules on `<app>.<domain>` and `<app>-preview.<domain>`, and passes the role to apps as `X-Agency-App-Role` (`currentUser().appRole`).
 
 ## Security notes for this MVP
 
 - The platform container mounts the Docker socket, which is root-equivalent on the host. Keep the host dedicated to Agency.
 - LLM keys are passed to pi with `docker exec -e` for each session, so they are visible inside sandboxes while the agent runs, never in published apps.
-- All signed-in members see all apps and connections. Per-project connection access and SSO are planned.
+- All signed-in members see the list of connections (never their credentials). SSO is planned.
 - The user headers are trustworthy for requests that come through Traefik. Containers on the internal Docker network (sandboxes included) can reach app containers directly and could set them, so don't base admin-only actions in apps on them alone until sandboxes get an egress allowlist.

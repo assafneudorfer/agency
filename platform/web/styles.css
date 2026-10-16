@@ -2249,3 +2249,137 @@ code {
 .tree-row span.chev {
 	flex: none;
 }
+
+/* ------------------------------------------------------------------------- */
+/* Connection sign-in, app access and sharing */
+
+.badge.warn {
+	background: color-mix(in srgb, var(--warning) 13%, transparent);
+	color: var(--warning);
+}
+
+.badge .icon {
+	width: 12px;
+	height: 12px;
+}
+
+.link-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--accent);
+	font: inherit;
+	cursor: pointer;
+}
+
+.link-btn .icon {
+	width: 13px;
+	height: 13px;
+}
+
+.link-btn:hover {
+	text-decoration: underline;
+}
+
+.connection-row {
+	align-items: flex-start;
+}
+
+.row-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+.app-access {
+	display: grid;
+	gap: 8px;
+	margin-top: 10px;
+	padding: 12px;
+	border-radius: var(--radius);
+	background: var(--surface-2);
+}
+
+.app-list {
+	display: grid;
+	gap: 6px;
+	max-height: 220px;
+	overflow: auto;
+	padding: 4px 0 4px 22px;
+}
+
+.steps {
+	margin: 0;
+	padding: 12px 14px 12px 32px;
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	color: var(--text-2);
+	font-size: 13px;
+	line-height: 1.55;
+}
+
+.steps li + li {
+	margin-top: 4px;
+}
+
+.copy-field {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 36px;
+	padding: 4px 4px 4px 12px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-sm);
+	background: var(--surface-2);
+}
+
+.copy-field code {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	font-size: 12.5px;
+}
+
+.select.sm {
+	width: auto;
+	height: 30px;
+	padding-top: 0;
+	padding-bottom: 0;
+	font-size: 12.5px;
+}
+
+.sheet .list-row.person {
+	padding-left: 0;
+	padding-right: 0;
+}
+
+.share-add {
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.share-add .select.grow {
+	flex: 1 1 180px;
+	min-width: 0;
+}
+
+.chat-input .callout {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+}
+
+@media (max-width: 640px) {
+	.connection-row {
+		flex-direction: column;
+	}
+
+	.row-actions {
+		justify-content: flex-start;
+	}
+}

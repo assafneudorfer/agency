@@ -190,6 +190,8 @@ const ICONS = {
 	table: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/>',
 	play: '<path d="m6 3 14 9-14 9z"/>',
 	gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+	share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4"/><path d="m15.4 6.5-6.8 4"/>',
+	link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
 	infinity: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4z"/>',
 };
 
@@ -445,7 +447,7 @@ function Home() {
 											: html`<span class="badge">Draft</span>`}
 								</div>
 								<div class="meta">
-									<strong>${p.name}</strong>
+									<strong>${p.name} ${p.role === "viewer" && html`<span class="badge">View only</span>`}</strong>
 									<div class="host">${p.slug}.${location.hostname}</div>
 								</div>
 							</a>`,
@@ -558,6 +560,7 @@ function Builder({ id }) {
 	}
 
 	const host = project.previewUrl.replace(/^https?:\/\//, "");
+	const canEdit = project.role === "editor" || project.role === "owner";
 	return html`<div class="builder">
 		<header class="topbar">
 			<div class="left">
@@ -583,8 +586,11 @@ function Builder({ id }) {
 				<button class="icon-btn" title="Dev server log" aria-pressed=${panel === "logs"} onClick=${() => togglePanel("logs")}>
 					${icon("terminal")}
 				</button>
+				<button class="icon-btn" title="Share" aria-pressed=${panel === "share"} onClick=${() => togglePanel("share")}>${icon("share")}</button>
 				<span class="sep"></span>
-				<button class="btn primary sm" onClick=${() => togglePanel("publish")}>${icon("globe")} Publish</button>
+				${canEdit
+					? html`<button class="btn primary sm" onClick=${() => togglePanel("publish")}>${icon("globe")} Publish</button>`
+					: html`<span class="badge">${icon("eye")} View only</span>`}
 			</div>
 		</header>
 		<div class="workbench">
@@ -597,7 +603,8 @@ function Builder({ id }) {
 					</div>`}
 					${items.map((item) => html`<${ChatItem} item=${item} />`)}
 				</div>
-				<div class="chat-input">
+				${canEdit
+					? html`<div class="chat-input">
 					${error && html`<div class="error">${error}</div>`}
 					<div class="chat-box">
 						<textarea
@@ -618,7 +625,10 @@ function Builder({ id }) {
 							<button class="btn primary send" title="Send" disabled=${!input.trim()} onClick=${send}>${icon("arrowUp")}</button>
 						</div>
 					</div>
-				</div>
+				</div>`
+					: html`<div class="chat-input">
+							<div class="callout">${icon("eye")} You can view this app. Ask its owner for edit access to change it.</div>
+						</div>`}
 			</section>
 			<section class="stage">
 				<div class="preview" hidden=${tab !== "preview"}>
@@ -640,6 +650,7 @@ function Builder({ id }) {
 				<${CodeView}
 					id=${id}
 					running=${running}
+					canEdit=${canEdit}
 					active=${tab === "code"}
 					restored=${restored}
 					onSaved=${() => setPreviewKey((k) => k + 1)}
@@ -649,6 +660,7 @@ function Builder({ id }) {
 					<${VersionsPanel}
 						id=${id}
 						running=${running}
+						canEdit=${canEdit}
 						onRestored=${() => {
 							setPreviewKey((k) => k + 1);
 							setRestored((n) => n + 1);
@@ -657,6 +669,9 @@ function Builder({ id }) {
 				<//>
 				<${Sheet} open=${panel === "logs"} title="Dev server log" onClose=${() => setPanel(null)}>
 					<${LogsPanel} id=${id} />
+				<//>
+				<${Sheet} open=${panel === "share"} title="Share" onClose=${() => setPanel(null)}>
+					<${SharePanel} project=${project} onChange=${loadProject} />
 				<//>
 				<${Sheet} open=${panel === "publish"} title="Publish" onClose=${() => setPanel(null)}>
 					<${PublishPanel} project=${project} running=${running} onChange=${loadProject} />
@@ -716,7 +731,7 @@ function TreeNode({ node, depth, expanded, onToggle, selected, onSelect }) {
 
 const DEFAULT_FILES = ["app/page.tsx", "app/page.jsx", "app/page.js", "README.md", "package.json"];
 
-function CodeView({ id, running, active, restored, onSaved }) {
+function CodeView({ id, running, canEdit, active, restored, onSaved }) {
 	const [files, setFiles] = useState(null);
 	const [listError, setListError] = useState("");
 	const [filter, setFilter] = useState("");
@@ -733,7 +748,7 @@ function CodeView({ id, running, active, restored, onSaved }) {
 	const wasRunning = useRef(running);
 	// Latest values for callbacks the editor holds on to.
 	const live = useRef({});
-	live.current = { doc, dirty, running, saving };
+	live.current = { doc, dirty, running, saving, locked: running || !canEdit };
 
 	const loadFiles = () =>
 		api(`/projects/${id}/files`).then(
@@ -779,7 +794,7 @@ function CodeView({ id, running, active, restored, onSaved }) {
 					onSave: () => save(),
 				});
 			}
-			editor.current.setReadOnly(live.current.running);
+			editor.current.setReadOnly(live.current.locked);
 			text.current = saved.current = data.content;
 			editor.current.open(path, data.content);
 			setDirty(false);
@@ -791,7 +806,7 @@ function CodeView({ id, running, active, restored, onSaved }) {
 
 	async function save() {
 		const { doc: current, dirty: changed, running: busy, saving: inFlight } = live.current;
-		if (!current || current.status !== "ready" || !changed || inFlight) return;
+		if (!current || current.status !== "ready" || !changed || inFlight || !canEdit) return;
 		if (busy) {
 			toast("The agent is working. Save again when it finishes.", "error");
 			return;
@@ -830,7 +845,7 @@ function CodeView({ id, running, active, restored, onSaved }) {
 
 	// The editor is read-only while the agent works; when it finishes, pick up its changes.
 	useEffect(() => {
-		editor.current?.setReadOnly(running);
+		editor.current?.setReadOnly(running || !canEdit);
 		if (wasRunning.current && !running) refresh();
 		wasRunning.current = running;
 	}, [running]);
@@ -891,15 +906,17 @@ function CodeView({ id, running, active, restored, onSaved }) {
 						i === crumbs.length - 1 ? html`<b>${part}</b>` : html`<span>${part}</span>${icon("chevron")}`,
 					)}
 				</div>
-				${doc?.status === "ready" &&
+				${!canEdit && html`<span class="badge">${icon("eye")} View only</span>`}
+				${canEdit && doc?.status === "ready" &&
 				html`<span class=${`save-state ${dirty ? "dirty" : ""}`}>
 					${saving ? html`<span class="spinner"></span> Saving` : dirty ? html`<span class="dot"></span> Unsaved` : html`${icon("check")} Saved`}
 				</span>`}
-				<button class="btn sm primary" disabled=${!dirty || saving || running || doc?.status !== "ready"} onClick=${save} title="Save (⌘S)">
+				${canEdit &&
+				html`<button class="btn sm primary" disabled=${!dirty || saving || running || doc?.status !== "ready"} onClick=${save} title="Save (⌘S)">
 					Save
-				</button>
+				</button>`}
 			</div>
-			${running && html`<div class="banner"><span class="spinner"></span> The agent is working, so editing is paused until it finishes.</div>`}
+			${running && canEdit && html`<div class="banner"><span class="spinner"></span> The agent is working, so editing is paused until it finishes.</div>`}
 			<div class="editor-host" ref=${host}>
 				${!doc && files?.length === 0 && html`<div class="empty">${icon("file")} No files yet.</div>`}
 				${doc?.status === "loading" && html`<div class="empty"><span class="spinner"></span></div>`}
@@ -1232,7 +1249,7 @@ function DataView({ project, running, active, onChanged }) {
 	</div>`;
 }
 
-function VersionsPanel({ id, running, onRestored }) {
+function VersionsPanel({ id, running, canEdit, onRestored }) {
 	const [versions, setVersions] = useState(null);
 	const [error, setError] = useState("");
 	const load = () => api(`/projects/${id}/versions`).then(setVersions, (err) => setError(err.message));
@@ -1258,7 +1275,7 @@ function VersionsPanel({ id, running, onRestored }) {
 					<div class="title">${v.subject} ${i === 0 && html`<span class="badge accent">Current</span>`}</div>
 					<div class="sub"><span class="mono">${v.commit}</span> · ${timeAgo(v.date)}</div>
 				</div>
-				${i > 0 && html`<button class="btn sm" disabled=${running} onClick=${() => restore(v.commit)}>Restore</button>`}
+				${i > 0 && canEdit && html`<button class="btn sm" disabled=${running} onClick=${() => restore(v.commit)}>Restore</button>`}
 			</div>`,
 		)}
 	</div>`;
@@ -1277,6 +1294,91 @@ function LogsPanel({ id }) {
 		box.current?.scrollTo(0, box.current.scrollHeight);
 	}, [logs]);
 	return html`<div class="sheet-body flush" ref=${box}><pre class="log">${logs || "Loading..."}</pre></div>`;
+}
+
+const TEAM_ACCESS = {
+	none: "Only the people below",
+	viewer: "Everyone on the team can view",
+	editor: "Everyone on the team can edit",
+};
+
+function SharePanel({ project, onChange }) {
+	const [data, setData] = useState(null);
+	const [people, setPeople] = useState([]);
+	const [pick, setPick] = useState("");
+	const [pickRole, setPickRole] = useState("editor");
+	const [error, setError] = useState("");
+	useEffect(() => {
+		api(`/projects/${project.id}/sharing`).then(setData, (err) => setError(err.message));
+		api("/people").then(setPeople, () => {});
+	}, [project.id]);
+	const update = async (body) => {
+		setError("");
+		try {
+			setData(await api(`/projects/${project.id}/sharing`, { method: "PUT", body }));
+			onChange();
+		} catch (err) {
+			setError(err.message);
+		}
+	};
+	if (!data) return html`<div class="sheet-body">${error ? html`<p class="error">${error}</p>` : html`<div class="empty"><span class="spinner"></span></div>`}</div>`;
+	const taken = new Set([data.owner.id, ...data.members.map((m) => m.userId)]);
+	const candidates = people.filter((p) => !taken.has(p.id));
+	const who = (person) => html`<span class="avatar">${(person.name || person.email).slice(0, 1)}</span>
+		<div class="grow">
+			<div class="title">${person.name || person.email}</div>
+			${person.name && html`<div class="sub">${person.email}</div>`}
+		</div>`;
+	return html`<div class="sheet-body">
+		<p class="faint" style="font-size:13px;margin:0 0 8px">
+			Viewers open the preview and the published app. Editors also chat with the agent, edit code and data, and publish. The owner and admins can always do everything.
+		</p>
+		<label class="field">
+			<span>General access</span>
+			<select class="select" value=${data.teamAccess} disabled=${!data.canManage} onChange=${(e) => update({ teamAccess: e.target.value })}>
+				${Object.entries(TEAM_ACCESS).map(([key, label]) => html`<option value=${key}>${label}</option>`)}
+			</select>
+		</label>
+		<h4 class="section-title" style="margin:8px 0 0">People</h4>
+		<div>
+			<div class="list-row person">${who(data.owner)}<span class="badge accent">Owner</span></div>
+			${data.members.map(
+				(m) => html`<div class="list-row person">
+					${who(m)}
+					${data.canManage
+						? html`<select class="select sm" value=${m.role} onChange=${(e) => update({ member: { userId: m.userId, role: e.target.value } })}>
+									<option value="viewer">Can view</option>
+									<option value="editor">Can edit</option>
+								</select>
+								<button class="icon-btn" title="Remove" onClick=${() => update({ member: { userId: m.userId, role: null } })}>${icon("x")}</button>`
+						: html`<span class="badge">${m.role === "editor" ? "Can edit" : "Can view"}</span>`}
+				</div>`,
+			)}
+		</div>
+		${data.canManage &&
+		html`<div class="row share-add">
+			<select class="select grow" value=${pick} onChange=${(e) => setPick(e.target.value)}>
+				<option value="">${candidates.length ? "Add a person..." : "Everyone is already added"}</option>
+				${candidates.map((p) => html`<option value=${p.id}>${p.name ? `${p.name} (${p.email})` : p.email}</option>`)}
+			</select>
+			<select class="select sm" value=${pickRole} onChange=${(e) => setPickRole(e.target.value)}>
+				<option value="viewer">Can view</option>
+				<option value="editor">Can edit</option>
+			</select>
+			<button
+				class="btn primary sm"
+				disabled=${!pick}
+				onClick=${async () => {
+					await update({ member: { userId: pick, role: pickRole } });
+					setPick("");
+				}}
+			>
+				Add
+			</button>
+		</div>`}
+		${!data.canManage && html`<div class="callout">Only the owner or an admin can change who has access.</div>`}
+		${error && html`<p class="error">${error}</p>`}
+	</div>`;
 }
 
 function PublishPanel({ project, running, onChange }) {
@@ -1319,7 +1421,7 @@ function PublishPanel({ project, running, onChange }) {
 	};
 	return html`<div class="sheet-body">
 		<div class="callout">
-			Publishes to <a href=${project.appUrl} target="_blank" rel="noopener">${project.appUrl}</a>. Only signed-in team members can open it.
+			Publishes to <a href=${project.appUrl} target="_blank" rel="noopener">${project.appUrl}</a>. Only people the app is shared with can open it.
 		</div>
 		<div class="row">
 			<button class="btn primary grow" disabled=${busy || running} onClick=${run}>
@@ -1346,6 +1448,8 @@ function PublishPanel({ project, running, onChange }) {
 	</div>`;
 }
 
+const REDIRECT_URL = `${location.origin}/oauth/callback`;
+
 const CONNECTION_TYPES = {
 	postgres: { label: "Postgres", kind: "postgres", ssl: "verify", hint: "postgres://user:password@host:5432/database" },
 	supabase: {
@@ -1355,13 +1459,70 @@ const CONNECTION_TYPES = {
 		hint: "Supabase > Project Settings > Database > Connection string (session pooler)",
 	},
 	rds: { label: "AWS RDS / Aurora Postgres", kind: "postgres", ssl: "require", hint: "postgres://user:password@xxx.rds.amazonaws.com:5432/db" },
-	mcp_http: {
-		label: "MCP server (URL): Monday, Salesforce, Google Drive, ...",
+	google_drive: {
+		label: "Google Drive and Sheets",
+		kind: "google_drive",
+		name: "drive",
+		description: "Shared drive files and spreadsheets",
+		hint: "Files, Docs and Sheets, read with the Google account you connect.",
+		steps: [
+			"In Google Cloud Console, open APIs & Services and enable the Google Drive API and the Google Sheets API.",
+			"Set up the OAuth consent screen. On Google Workspace pick Internal, so only your organization can use it.",
+			"Under Credentials, create an OAuth client ID of type Web application and add the redirect URI below.",
+			"Paste the client ID and secret here, add the connection, and sign in with the Google account whose files apps should see.",
+		],
+	},
+	salesforce: {
+		label: "Salesforce",
+		kind: "salesforce",
+		name: "salesforce",
+		description: "CRM: accounts, opportunities, contacts",
+		hint: "Objects and SOQL queries, with the Salesforce user you connect.",
+		steps: [
+			"In Salesforce Setup, open App Manager and create an External Client App (or a Connected App) with OAuth enabled.",
+			"Use the redirect URI below as the callback URL, add the scopes api and refresh_token (offline_access), and keep PKCE on.",
+			"Paste the consumer key (and the secret if the app has one). Sandboxes sign in at https://test.salesforce.com.",
+			"Add the connection and sign in with the Salesforce user whose data apps should see; a read-only integration user is safest.",
+		],
+	},
+	monday: {
+		label: "monday.com",
 		kind: "mcp_http",
+		name: "monday",
+		description: "Boards, items and updates",
+		url: "https://mcp.monday.com/mcp",
+		auth: "oauth",
+		hint: "monday.com's own MCP server. Sign in, or paste an API token from your monday.com profile > Developers.",
+		tokenHeader: "Authorization: Bearer <API token>",
+	},
+	notion: {
+		label: "Notion",
+		kind: "mcp_http",
+		name: "notion",
+		description: "Pages and databases",
+		url: "https://mcp.notion.com/mcp",
+		auth: "oauth",
+		hint: "Notion's own MCP server. Sign in with the workspace apps should read.",
+	},
+	linear: {
+		label: "Linear",
+		kind: "mcp_http",
+		name: "linear",
+		description: "Issues and projects",
+		url: "https://mcp.linear.app/mcp",
+		auth: "oauth",
+		hint: "Linear's own MCP server. Sign in with the workspace apps should read.",
+	},
+	mcp_http: {
+		label: "Other MCP server (URL)",
+		kind: "mcp_http",
+		auth: "headers",
 		hint: "The vendor's streamable HTTP MCP endpoint, usually ending in /mcp",
 	},
 	mcp_stdio: { label: "MCP server (command)", kind: "mcp_stdio", hint: "npx -y some-mcp-server --flag" },
 };
+
+const KIND_LABELS = { postgres: "Postgres", mcp_http: "MCP", mcp_stdio: "MCP command", google_drive: "Google Drive", salesforce: "Salesforce" };
 
 function parseHeaders(text) {
 	const headers = {};
@@ -1381,49 +1542,172 @@ function parseEnv(text) {
 	return env;
 }
 
+function emptyForm(spec = {}) {
+	return {
+		name: spec.name ?? "",
+		description: spec.description ?? "",
+		target: spec.url ?? "",
+		extra: "",
+		clientId: "",
+		clientSecret: "",
+		loginUrl: "",
+		auth: spec.auth ?? "headers",
+		allowWrite: false,
+	};
+}
+
+function connectionConfig(spec, form) {
+	if (spec.kind === "postgres") return { connectionString: form.target, ssl: spec.ssl };
+	if (spec.kind === "google_drive") return { clientId: form.clientId.trim(), clientSecret: form.clientSecret.trim() };
+	if (spec.kind === "salesforce") {
+		return { clientId: form.clientId.trim(), clientSecret: form.clientSecret.trim() || undefined, loginUrl: form.loginUrl.trim() || undefined };
+	}
+	if (spec.kind === "mcp_http") {
+		const config = { url: form.target.trim(), headers: parseHeaders(form.extra) };
+		if (form.auth === "oauth") {
+			config.oauth = {};
+			if (form.clientId.trim()) config.oauth.clientId = form.clientId.trim();
+			if (form.clientSecret.trim()) config.oauth.clientSecret = form.clientSecret.trim();
+		}
+		return config;
+	}
+	const [command, ...args] = form.target.trim().split(/\s+/);
+	return { command, args, env: parseEnv(form.extra) };
+}
+
+/** Sends the admin to the provider's sign-in page; they come back to /oauth/callback. */
+async function connectAccount(connection) {
+	try {
+		const { url } = await api(`/connections/${connection.id}/connect`, { method: "POST" });
+		if (url) location.href = url;
+		else toast(`${connection.name} is already connected`);
+		return Boolean(url);
+	} catch (err) {
+		toast(err.message, "error");
+		return false;
+	}
+}
+
+function AppAccess({ connection, projects, onSaved, onCancel }) {
+	const [all, setAll] = useState(connection.allProjects);
+	const [ids, setIds] = useState(() => new Set(connection.projectIds));
+	const [busy, setBusy] = useState(false);
+	const save = async () => {
+		setBusy(true);
+		try {
+			await api(`/connections/${connection.id}/projects`, { method: "PUT", body: { allProjects: all, projectIds: [...ids] } });
+			toast(`Updated who can use ${connection.name}`);
+			onSaved();
+		} catch (err) {
+			toast(err.message, "error");
+		}
+		setBusy(false);
+	};
+	return html`<div class="app-access">
+		<label class="check"><input type="radio" checked=${all} onChange=${() => setAll(true)} /> All apps</label>
+		<label class="check"><input type="radio" checked=${!all} onChange=${() => setAll(false)} /> Only these apps</label>
+		${!all &&
+		html`<div class="app-list">
+			${projects === null
+				? html`<span class="spinner"></span>`
+				: projects.length === 0
+					? html`<span class="faint">No apps yet.</span>`
+					: projects.map(
+							(p) => html`<label class="check">
+								<input
+									type="checkbox"
+									checked=${ids.has(p.id)}
+									onChange=${(e) => {
+										const next = new Set(ids);
+										if (e.target.checked) next.add(p.id);
+										else next.delete(p.id);
+										setIds(next);
+									}}
+								/>
+								${p.name} <span class="faint mono">${p.slug}</span>
+							</label>`,
+						)}
+		</div>`}
+		<div class="row">
+			<button class="btn primary sm" disabled=${busy} onClick=${save}>Save</button>
+			<button class="btn sm" onClick=${onCancel}>Cancel</button>
+		</div>
+	</div>`;
+}
+
 function Connections({ user }) {
 	const [connections, setConnections] = useState(null);
+	const [projects, setProjects] = useState(null);
 	const [type, setType] = useState("postgres");
-	const [form, setForm] = useState({ name: "", description: "", target: "", extra: "", allowWrite: false });
+	const [form, setForm] = useState(emptyForm());
 	const [error, setError] = useState("");
+	const [busy, setBusy] = useState(false);
 	const [results, setResults] = useState({});
+	const [editing, setEditing] = useState(null);
+	const isAdmin = user.role === "admin";
 	const load = () => api("/connections").then(setConnections, (err) => setError(err.message));
 	useEffect(() => {
 		load();
+		if (isAdmin) api("/projects").then(setProjects, () => setProjects([]));
+		// Back from a provider's sign-in page.
+		const params = new URLSearchParams(location.hash.split("?")[1] ?? "");
+		if (params.get("connected")) toast(`Connected ${params.get("connected")}`);
+		if (params.get("oauth_error")) toast(`Sign-in failed: ${params.get("oauth_error")}`, "error");
+		if (params.size) history.replaceState(null, "", "#/connections");
 	}, []);
 	const spec = CONNECTION_TYPES[type];
 	const set = (key) => (e) => setForm({ ...form, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+	const pickType = (next) => {
+		setType(next);
+		setForm(emptyForm(CONNECTION_TYPES[next]));
+		setError("");
+	};
+	const signInType = spec.kind === "google_drive" || spec.kind === "salesforce" || (spec.kind === "mcp_http" && form.auth === "oauth");
 	const add = async (e) => {
 		e.preventDefault();
 		setError("");
-		let config;
-		if (spec.kind === "postgres") config = { connectionString: form.target, ssl: spec.ssl };
-		else if (spec.kind === "mcp_http") config = { url: form.target, headers: parseHeaders(form.extra) };
-		else {
-			const [command, ...args] = form.target.trim().split(/\s+/);
-			config = { command, args, env: parseEnv(form.extra) };
-		}
+		setBusy(true);
 		try {
-			await api("/connections", {
+			const connection = await api("/connections", {
 				method: "POST",
-				body: { name: form.name, kind: spec.kind, description: form.description, allowWrite: form.allowWrite, config },
+				body: {
+					name: form.name,
+					kind: spec.kind,
+					description: form.description,
+					allowWrite: form.allowWrite,
+					config: connectionConfig(spec, form),
+				},
 			});
-			toast(`Added ${form.name}`);
-			setForm({ name: "", description: "", target: "", extra: "", allowWrite: false });
-			load();
+			setForm(emptyForm(spec));
+			await load();
+			if (connection.signIn === "needed") {
+				if (await connectAccount(connection)) return;
+			} else toast(`Added ${connection.name}`);
 		} catch (err) {
 			setError(err.message);
 		}
+		setBusy(false);
 	};
 	const test = async (name) => {
 		setResults({ ...results, [name]: { pending: true } });
 		const result = await api(`/connections/${name}/test`, { method: "POST" });
 		setResults((r) => ({ ...r, [name]: result }));
 	};
+	const disconnect = async (c) => {
+		if (!confirm(`Sign ${c.name} out? Apps using it stop getting data until someone connects it again.`)) return;
+		await api(`/connections/${c.id}/disconnect`, { method: "POST" });
+		load();
+	};
 	const remove = async (id) => {
 		if (!confirm("Remove this connection? Apps using it will stop getting data.")) return;
 		await api(`/connections/${id}`, { method: "DELETE" });
 		load();
+	};
+	const appsLabel = (c) => {
+		if (c.allProjects) return "All apps";
+		const names = (projects ?? []).filter((p) => c.projectIds.includes(p.id)).map((p) => p.name);
+		if (names.length === 0) return c.projectIds.length ? `${c.projectIds.length} apps` : "No apps";
+		return names.length <= 2 ? names.join(", ") : `${names.length} apps`;
 	};
 	return html`<div class="page">
 		<header class="page-head">
@@ -1438,24 +1722,47 @@ function Connections({ user }) {
 						? html`<div class="empty">${icon("database")} No connections yet.</div>`
 						: connections.map((c) => {
 								const result = results[c.name];
-								return html`<div class="list-row">
+								return html`<div class="list-row connection-row">
 									<div class="grow">
 										<div class="title">
-											${c.name} <span class="badge">${c.kind}</span>
+											${c.name} <span class="badge">${KIND_LABELS[c.kind] ?? c.kind}</span>
 											${c.allowWrite ? html`<span class="badge">writes allowed</span>` : html`<span class="badge">read-only</span>`}
+											${c.signIn === "needed" && html`<span class="badge warn"><span class="dot"></span>Not connected</span>`}
+											${c.signIn === "signed_in" && html`<span class="badge live"><span class="dot"></span>Connected</span>`}
 										</div>
 										${c.description && html`<div class="sub">${c.description}</div>`}
+										<div class="sub">
+											${c.signIn === "signed_in" && c.account ? html`Signed in as ${c.account} · ` : null}
+											${isAdmin
+												? html`<button class="link-btn" onClick=${() => setEditing(editing === c.id ? null : c.id)}>${icon("link")} ${appsLabel(c)}</button>`
+												: appsLabel(c)}
+										</div>
 										${result &&
 										html`<div class="sub" style=${result.pending ? "" : `color:var(${result.ok ? "--success" : "--danger"})`}>
 											${result.pending ? "Testing..." : result.message}
 										</div>`}
+										${editing === c.id &&
+										html`<${AppAccess}
+											connection=${c}
+											projects=${projects}
+											onSaved=${() => {
+												setEditing(null);
+												load();
+											}}
+											onCancel=${() => setEditing(null)}
+										/>`}
 									</div>
-									<button class="btn sm" onClick=${() => test(c.name)}>Test</button>
-									${user.role === "admin" && html`<button class="btn sm danger" onClick=${() => remove(c.id)}>Remove</button>`}
+									<div class="row-actions">
+										${isAdmin && c.signIn === "needed" && html`<button class="btn sm primary" onClick=${() => connectAccount(c)}>Connect</button>`}
+										${c.signIn !== "needed" && html`<button class="btn sm" onClick=${() => test(c.name)}>Test</button>`}
+										${isAdmin && c.signIn === "signed_in" && html`<button class="btn sm" onClick=${() => connectAccount(c)}>Reconnect</button>`}
+										${isAdmin && c.signIn === "signed_in" && html`<button class="btn sm" onClick=${() => disconnect(c)}>Disconnect</button>`}
+										${isAdmin && html`<button class="btn sm danger" onClick=${() => remove(c.id)}>Remove</button>`}
+									</div>
 								</div>`;
 							})}
 			</div>
-			${user.role === "admin" &&
+			${isAdmin &&
 			html`<form class="card" onSubmit=${add}>
 				<div class="card-head">
 					<h2>Add a connection</h2>
@@ -1464,7 +1771,7 @@ function Connections({ user }) {
 				<div class="card-body form-grid">
 					<label class="field">
 						<span>Type</span>
-						<select class="select" value=${type} onChange=${(e) => setType(e.target.value)}>
+						<select class="select" value=${type} onChange=${(e) => pickType(e.target.value)}>
 							${Object.entries(CONNECTION_TYPES).map(([key, value]) => html`<option value=${key}>${value.label}</option>`)}
 						</select>
 					</label>
@@ -1476,24 +1783,83 @@ function Connections({ user }) {
 						<span>Description</span>
 						<input class="input" placeholder="Sales CRM: deals, accounts, contacts" value=${form.description} onInput=${set("description")} />
 					</label>
-					<label class="field wide">
+					${spec.steps &&
+					html`<ol class="steps wide">
+						${spec.steps.map((step) => html`<li>${step}</li>`)}
+					</ol>`}
+					${(spec.kind === "postgres" || spec.kind === "mcp_http" || spec.kind === "mcp_stdio") &&
+					html`<label class="field wide">
 						<span>${spec.kind === "postgres" ? "Connection string" : spec.kind === "mcp_http" ? "MCP URL" : "Command"}</span>
 						<input class="input mono" placeholder=${spec.hint} value=${form.target} onInput=${set("target")} required />
-					</label>
+					</label>`}
 					${spec.kind === "mcp_http" &&
 					html`<label class="field wide">
+						<span>Authentication</span>
+						<select class="select" value=${form.auth} onChange=${set("auth")}>
+							<option value="oauth">Sign in with the service (OAuth)</option>
+							<option value="headers">${spec.tokenHeader ? "API token" : "Headers or none"}</option>
+						</select>
+					</label>`}
+					${spec.kind === "mcp_http" &&
+					form.auth === "headers" &&
+					html`<label class="field wide">
 						<span>Headers <span class="hint">one per line</span></span>
-						<textarea class="textarea mono" rows="2" placeholder="Authorization: Bearer ..." value=${form.extra} onInput=${set("extra")}></textarea>
+						<textarea class="textarea mono" rows="2" placeholder=${spec.tokenHeader ?? "Authorization: Bearer ..."} value=${form.extra} onInput=${set("extra")}></textarea>
 					</label>`}
 					${spec.kind === "mcp_stdio" &&
 					html`<label class="field wide">
 						<span>Environment <span class="hint">KEY=value per line</span></span>
 						<textarea class="textarea mono" rows="2" placeholder="API_TOKEN=..." value=${form.extra} onInput=${set("extra")}></textarea>
 					</label>`}
+					${(spec.kind === "google_drive" || spec.kind === "salesforce") &&
+					html`<label class="field">
+							<span>${spec.kind === "salesforce" ? "Consumer key" : "Client ID"}</span>
+							<input class="input mono" value=${form.clientId} onInput=${set("clientId")} required />
+						</label>
+						<label class="field">
+							<span>${spec.kind === "salesforce" ? "Consumer secret" : "Client secret"} ${spec.kind === "salesforce" && html`<span class="hint">optional</span>`}</span>
+							<input class="input mono" type="password" value=${form.clientSecret} onInput=${set("clientSecret")} required=${spec.kind === "google_drive"} />
+						</label>`}
+					${spec.kind === "salesforce" &&
+					html`<label class="field wide">
+						<span>Login URL <span class="hint">optional</span></span>
+						<input class="input mono" placeholder="https://login.salesforce.com" value=${form.loginUrl} onInput=${set("loginUrl")} />
+					</label>`}
+					${spec.kind === "mcp_http" &&
+					form.auth === "oauth" &&
+					html`<p class="faint wide" style="margin:0;font-size:12.5px">
+							Agency registers itself with the server when you connect. Only if the server asks for an app you registered yourself, enter its client ID and secret.
+						</p>
+						<label class="field">
+							<span>Client ID <span class="hint">optional</span></span>
+							<input class="input mono" value=${form.clientId} onInput=${set("clientId")} />
+						</label>
+						<label class="field">
+							<span>Client secret <span class="hint">optional</span></span>
+							<input class="input mono" type="password" value=${form.clientSecret} onInput=${set("clientSecret")} />
+						</label>`}
+					${signInType &&
+					html`<div class="field wide">
+						<span>Redirect URI <span class="hint">register this with the provider</span></span>
+						<div class="copy-field">
+							<code class="mono">${REDIRECT_URL}</code>
+							<button
+								type="button"
+								class="btn sm"
+								onClick=${() => navigator.clipboard?.writeText(REDIRECT_URL).then(() => toast("Copied the redirect URI"))}
+							>
+								Copy
+							</button>
+						</div>
+					</div>`}
 					<label class="check wide"><input type="checkbox" checked=${form.allowWrite} onChange=${set("allowWrite")} /> Allow apps to write</label>
 					${error && html`<div class="error wide">${error}</div>`}
 				</div>
-				<div class="card-foot"><button class="btn primary">${icon("plus")} Add connection</button></div>
+				<div class="card-foot">
+					<button class="btn primary" disabled=${busy}>
+						${busy ? html`<span class="spinner"></span>` : icon("plus")} ${signInType ? "Add and connect" : "Add connection"}
+					</button>
+				</div>
 			</form>`}
 		</div>
 	</div>`;

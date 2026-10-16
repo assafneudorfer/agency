@@ -1,8 +1,10 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { projectRole, slugFromHost } from "./access.ts";
 import { config } from "./config.ts";
 import { hashPassword, randomToken, verifyPassword } from "./crypto.ts";
 import { query, queryOne } from "./db.ts";
+import type { Project } from "./projects.ts";
 
 export interface User {
 	id: string;
@@ -113,6 +115,20 @@ export function safeNext(next: string | undefined): string {
 export async function verifyForwardAuth(c: Context): Promise<Response> {
 	const user = await currentUser(c);
 	if (user) {
+		// Each preview and app checks the member's access to that app; hosts that aren't an app are refused.
+		const slug = slugFromHost(c.req.header("X-Forwarded-Host") ?? "", config.baseDomain);
+		const project = slug ? await queryOne<Project>("select * from projects where slug = $1", [slug]) : undefined;
+		const role = project ? await projectRole(user, project) : null;
+		if (!role) {
+			return c.html(
+				`<!doctype html><meta name="viewport" content="width=device-width"><title>No access</title>
+				<body style="font:16px system-ui;margin:15vh auto;max-width:28rem;padding:0 16px;text-align:center">
+				<h1 style="font-size:20px">You don't have access to this app</h1>
+				<p>Ask its owner to share it with you, then reload. <a href="${config.publicUrl}/">Back to Agency</a></p>`,
+				403,
+			);
+		}
+		c.header("X-Agency-App-Role", role);
 		c.header("X-Agency-User", user.email);
 		c.header("X-Agency-User-Id", user.id);
 		// Header values must be ASCII; names can be in any language.

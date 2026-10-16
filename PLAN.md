@@ -29,6 +29,6 @@ Replace email and password sign-in with the organization's identity provider so 
 
 ## Later
 
-- Per-project connection access and roles (viewer, builder, admin).
+- Per-user connector sign-in (each person sees their own Drive or CRM data) on top of the shared organization sign-in.
 - Sandbox hardening: gVisor or Firecracker runtime, egress allowlist, idle sandbox shutdown.
 - Multiple hosts (ECS or Kubernetes) when one instance is not enough.

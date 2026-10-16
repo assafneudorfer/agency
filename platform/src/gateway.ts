@@ -26,12 +26,12 @@ function errorMessage(error: unknown): string {
 export const gateway = new Hono<GatewayEnv>();
 gateway.use("*", requireProjectToken);
 
-gateway.get("/connections", async (c) => c.json(await listConnections()));
+gateway.get("/connections", async (c) => c.json(await listConnections(c.get("project").id)));
 
 gateway.post("/query", async (c) => {
 	const body = await c.req.json<{ connection: string; sql: string; params?: unknown[] }>();
 	try {
-		return c.json(await runSql(body.connection, body.sql, body.params ?? []));
+		return c.json(await runSql(body.connection, body.sql, body.params ?? [], 5000, c.get("project").id));
 	} catch (error) {
 		return c.json({ error: errorMessage(error) }, 400);
 	}
@@ -40,7 +40,7 @@ gateway.post("/query", async (c) => {
 gateway.post("/tool", async (c) => {
 	const body = await c.req.json<{ connection: string; tool: string; arguments?: Record<string, unknown> }>();
 	try {
-		return c.json(await callTool(body.connection, body.tool, body.arguments ?? {}));
+		return c.json(await callTool(body.connection, body.tool, body.arguments ?? {}, c.get("project").id));
 	} catch (error) {
 		return c.json({ error: errorMessage(error) }, 400);
 	}
@@ -54,7 +54,7 @@ function failure(error: unknown) {
 	return { content: [{ type: "text" as const, text: errorMessage(error) }], isError: true };
 }
 
-function buildMcpServer(): McpServer {
+function buildMcpServer(project: Project): McpServer {
 	const server = new McpServer(
 		{ name: "agency", version: "0.1.0" },
 		{
@@ -66,13 +66,13 @@ function buildMcpServer(): McpServer {
 		"list_connections",
 		{ description: "List the organization's data connections (databases and MCP connectors)." },
 		async () => {
-			const connections = await listConnections();
-			if (connections.length === 0) return text("No connections yet. An admin adds them under Connections.");
+			const connections = await listConnections(project.id);
+			if (connections.length === 0) return text("No connections are available to this app. An admin adds them under Connections.");
 			return text(
 				connections
 					.map(
 						(conn) =>
-							`- ${conn.name} [${conn.kind}${conn.allowWrite ? ", writes allowed" : ", read-only"}] ${conn.description}`,
+							`- ${conn.name} [${conn.kind}${conn.allowWrite ? ", writes allowed" : ", read-only"}${conn.signIn === "needed" ? ", not signed in yet: an admin must click Connect" : ""}] ${conn.description}`,
 					)
 					.join("\n"),
 			);
@@ -86,7 +86,7 @@ function buildMcpServer(): McpServer {
 		},
 		async ({ connection }) => {
 			try {
-				return text(await describeConnection(connection));
+				return text(await describeConnection(connection, project.id));
 			} catch (error) {
 				return failure(error);
 			}
@@ -101,7 +101,7 @@ function buildMcpServer(): McpServer {
 		},
 		async ({ connection, sql, params }) => {
 			try {
-				const result = await runSql(connection, sql, params ?? [], 100);
+				const result = await runSql(connection, sql, params ?? [], 100, project.id);
 				return text(JSON.stringify(result, null, 2));
 			} catch (error) {
 				return failure(error);
@@ -116,7 +116,7 @@ function buildMcpServer(): McpServer {
 		},
 		async ({ connection, tool, arguments: args }) => {
 			try {
-				return text(JSON.stringify(await callTool(connection, tool, args ?? {}), null, 2));
+				return text(JSON.stringify(await callTool(connection, tool, args ?? {}, project.id), null, 2));
 			} catch (error) {
 				return failure(error);
 			}
@@ -129,7 +129,7 @@ function buildMcpServer(): McpServer {
 export const mcpApp = new Hono<GatewayEnv>();
 mcpApp.use("*", requireProjectToken);
 mcpApp.all("/", async (c) => {
-	const server = buildMcpServer();
+	const server = buildMcpServer(c.get("project"));
 	const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
 	await server.connect(transport);
 	return transport.handleRequest(c.req.raw);

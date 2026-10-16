@@ -35,7 +35,7 @@ services:
       traefik.http.middlewares.agency-auth.forwardauth.address: http://platform:8080/auth/verify
       traefik.http.middlewares.agency-auth.forwardauth.trustForwardHeader: "true"
       # Who is signed in, for the app: these replace any same-named headers the browser sent.
-      traefik.http.middlewares.agency-auth.forwardauth.authResponseHeaders: X-Agency-User,X-Agency-User-Id,X-Agency-User-Name,X-Agency-User-Role
+      traefik.http.middlewares.agency-auth.forwardauth.authResponseHeaders: X-Agency-User,X-Agency-User-Id,X-Agency-User-Name,X-Agency-User-Role,X-Agency-App-Role
     networks: [agency]
     restart: unless-stopped
 

@@ -8,6 +8,8 @@ export interface AppUser {
 	email: string;
 	name: string;
 	role: "admin" | "member";
+	/** What this person may do with this app in Agency: "owner" (its creator or an admin), "editor" or "viewer". */
+	appRole: "owner" | "editor" | "viewer";
 }
 
 /** Returns the signed-in user, or null when the request did not come through the platform (for example a build step). */
@@ -24,6 +26,7 @@ export async function currentUser(): Promise<AppUser | null> {
 		email,
 		name,
 		role: h.get("x-agency-user-role") === "admin" ? "admin" : "member",
+		appRole: (["owner", "editor"] as const).find((r) => r === h.get("x-agency-app-role")) ?? "viewer",
 	};
 }
 

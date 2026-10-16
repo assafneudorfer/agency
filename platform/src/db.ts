@@ -90,6 +90,38 @@ create index if not exists usage_events_user_time on usage_events (user_id, crea
 -- Published apps get their own database, separate from the preview's.
 alter table projects add column if not exists live_db_name text;
 alter table projects add column if not exists live_db_password_enc text;
+
+-- Connections signed in with OAuth (MCP servers, Google Drive, Salesforce) keep their tokens here.
+alter table connections drop constraint if exists connections_kind_check;
+alter table connections add constraint connections_kind_check
+	check (kind in ('postgres', 'mcp_http', 'mcp_stdio', 'google_drive', 'salesforce'));
+alter table connections add column if not exists oauth_enc text;
+alter table connections add column if not exists oauth_account text not null default '';
+
+-- Which apps may use a connection: all of them, or only those listed in connection_projects.
+alter table connections add column if not exists all_projects boolean not null default true;
+create table if not exists connection_projects (
+	connection_id uuid not null references connections(id) on delete cascade,
+	project_id uuid not null references projects(id) on delete cascade,
+	primary key (connection_id, project_id)
+);
+
+-- Who can open and change an app besides its owner and admins. team_access is what every other member gets.
+-- Apps created before sharing existed stay editable by the whole team; new apps start view-only for others.
+do $$
+begin
+	if not exists (select 1 from information_schema.columns where table_name = 'projects' and column_name = 'team_access') then
+		alter table projects add column team_access text not null default 'editor'
+			check (team_access in ('none', 'viewer', 'editor'));
+		alter table projects alter column team_access set default 'viewer';
+	end if;
+end $$;
+create table if not exists project_members (
+	project_id uuid not null references projects(id) on delete cascade,
+	user_id uuid not null references users(id) on delete cascade,
+	role text not null check (role in ('viewer', 'editor')),
+	primary key (project_id, user_id)
+);
 `;
 
 export async function migrate(): Promise<void> {

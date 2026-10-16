@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { config } from "./config.ts";
 import { execIn, spawnDocker } from "./docker.ts";
+import { autoPush } from "./github.ts";
 import { ensureSandbox, type Project, sandboxName } from "./projects.ts";
 import { recordUsage } from "./usage.ts";
 
@@ -167,6 +168,7 @@ export class AgentBridge {
 		const result = await execIn(sandboxName(this.project), script);
 		const commit = result.stdout.trim().split("\n").pop() ?? "";
 		this.emit({ type: "agency_committed", commit });
+		autoPush(this.project.id);
 		return commit;
 	}
 

@@ -1,3 +1,4 @@
+import type { TeamAccess } from "./access.ts";
 import { config, previewHost } from "./config.ts";
 import { decryptJson, encryptJson, randomToken } from "./crypto.ts";
 import { pool, query, queryOne } from "./db.ts";
@@ -14,6 +15,14 @@ export interface Project {
 	// Database of the published app. Created on the first publish, so the preview never touches live data.
 	live_db_name: string | null;
 	live_db_password_enc: string | null;
+	// What members other than the owner, admins and listed project members can do with the app.
+	team_access: TeamAccess;
+	// GitHub repository ("owner/name") the app's history is pushed to, if linked.
+	github_repo: string | null;
+	github_branch: string;
+	github_auto_push: boolean;
+	github_pushed_commit: string | null;
+	github_pushed_at: string | null;
 	created_at: string;
 }
 

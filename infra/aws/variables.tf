@@ -107,3 +107,9 @@ variable "agency_model" {
   type        = string
   default     = ""
 }
+
+variable "backup_retention_days" {
+  description = "Days to keep nightly database backups in S3"
+  type        = number
+  default     = 30
+}

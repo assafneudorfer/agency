@@ -107,12 +107,17 @@ export function safeNext(next: string | undefined): string {
 
 /**
  * Traefik forwardAuth endpoint. Previews and published apps carry the agency-auth middleware,
- * so only signed-in team members can open them.
+ * so only signed-in team members can open them. Traefik copies the X-Agency-User* headers onto the
+ * request it forwards (authResponseHeaders), replacing any the browser sent, so apps can trust them.
  */
 export async function verifyForwardAuth(c: Context): Promise<Response> {
 	const user = await currentUser(c);
 	if (user) {
 		c.header("X-Agency-User", user.email);
+		c.header("X-Agency-User-Id", user.id);
+		// Header values must be ASCII; names can be in any language.
+		c.header("X-Agency-User-Name", encodeURIComponent(user.name || user.email));
+		c.header("X-Agency-User-Role", user.role);
 		return c.body(null, 200);
 	}
 	const proto = c.req.header("X-Forwarded-Proto") ?? config.scheme;

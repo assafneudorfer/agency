@@ -186,6 +186,9 @@ const ICONS = {
 	search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
 	alert: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
 	plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+	trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+	table: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/>',
+	play: '<path d="m6 3 14 9-14 9z"/>',
 	gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
 	infinity: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4z"/>',
 };
@@ -567,9 +570,10 @@ function Builder({ id }) {
 						: null}
 			</div>
 			<div class="center">
-				<div class="seg" role="tablist" style=${`--index:${tab === "code" ? 1 : 0};--count:2`}>
+				<div class="seg" role="tablist" style=${`--index:${["preview", "code", "data"].indexOf(tab)};--count:3`}>
 					<button role="tab" aria-selected=${tab === "preview"} onClick=${() => setTab("preview")}>${icon("eye")} Preview</button>
 					<button role="tab" aria-selected=${tab === "code"} onClick=${() => setTab("code")}>${icon("code")} Code</button>
+					<button role="tab" aria-selected=${tab === "data"} onClick=${() => setTab("data")}>${icon("database")} Data</button>
 				</div>
 			</div>
 			<div class="right">
@@ -640,6 +644,7 @@ function Builder({ id }) {
 					restored=${restored}
 					onSaved=${() => setPreviewKey((k) => k + 1)}
 				/>
+				<${DataView} project=${project} running=${running} active=${tab === "data"} onChanged=${() => setPreviewKey((k) => k + 1)} />
 				<${Sheet} open=${panel === "versions"} title="Versions" onClose=${() => setPanel(null)}>
 					<${VersionsPanel}
 						id=${id}
@@ -902,6 +907,327 @@ function CodeView({ id, running, active, restored, onSaved }) {
 				${doc?.status === "tooLarge" && html`<div class="empty">${icon("file")} This file is larger than 1 MB, so it can't be edited here.</div>`}
 				${doc?.status === "error" && html`<div class="empty error">${icon("alert")} ${doc.error}</div>`}
 			</div>
+		</section>
+	</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Data view: the app's own database. Preview and live are separate databases; the live one
+// exists after the first publish. Cells edit in place on tables with a primary key.
+
+const PAGE_SIZE = 50;
+
+function keyOf(table, row) {
+	return Object.fromEntries(table.primaryKey.map((name) => [name, row[name]]));
+}
+
+function Cell({ value }) {
+	if (value === null) return html`<span class="null">NULL</span>`;
+	return value.length > 120 ? `${value.slice(0, 120)}…` : value;
+}
+
+function DataView({ project, running, active, onChanged }) {
+	const id = project.id;
+	const [env, setEnv] = useState("preview");
+	const [info, setInfo] = useState(null);
+	const [selected, setSelected] = useState(null);
+	const [page, setPage] = useState(null);
+	const [offset, setOffset] = useState(0);
+	const [editing, setEditing] = useState(null);
+	const [adding, setAdding] = useState(null);
+	const [sqlOpen, setSqlOpen] = useState(false);
+	const [sql, setSql] = useState("");
+	const [result, setResult] = useState(null);
+	const [error, setError] = useState("");
+	const [busy, setBusy] = useState(false);
+	const started = useRef(false);
+	const wasRunning = useRef(running);
+
+	const loadTables = async (nextEnv = env) => {
+		setError("");
+		try {
+			const data = await api(`/projects/${id}/data/tables?env=${nextEnv}`);
+			setInfo(data);
+			const names = data.tables.map((t) => t.name);
+			const first = data.tables.find((t) => t.primaryKey.length > 0) ?? data.tables[0];
+			setSelected((current) => (names.includes(current) ? current : (first?.name ?? null)));
+		} catch (err) {
+			setInfo({ tables: [], canWrite: false, missing: false });
+			setError(err.message);
+		}
+	};
+
+	const loadRows = async () => {
+		if (!selected) {
+			setPage(null);
+			return;
+		}
+		try {
+			const params = new URLSearchParams({ env, table: selected, offset: String(offset), limit: String(PAGE_SIZE) });
+			setPage(await api(`/projects/${id}/data/rows?${params}`));
+		} catch (err) {
+			setError(err.message);
+		}
+	};
+
+	useEffect(() => {
+		if (!active || started.current) return;
+		started.current = true;
+		loadTables();
+	}, [active]);
+
+	// The agent may have added tables or rows.
+	useEffect(() => {
+		if (wasRunning.current && !running && started.current) loadTables();
+		wasRunning.current = running;
+	}, [running]);
+
+	useEffect(() => {
+		setEditing(null);
+		setAdding(null);
+		loadRows();
+	}, [selected, offset, env, info]);
+
+	const switchEnv = (next) => {
+		if (next === env) return;
+		setEnv(next);
+		setOffset(0);
+		setPage(null);
+		setResult(null);
+		loadTables(next);
+	};
+
+	const changed = () => {
+		loadRows();
+		if (env === "preview") onChanged();
+	};
+
+	const send = async (method, body) => {
+		setBusy(true);
+		try {
+			await api(`/projects/${id}/data/rows?env=${env}`, { method, body: { table: selected, ...body } });
+			return true;
+		} catch (err) {
+			toast(err.message, "error");
+			return false;
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const saveCell = async () => {
+		if (!editing) return;
+		const { row, column, value } = editing;
+		const original = row[column.name];
+		const next = value === "" && column.nullable ? null : value;
+		setEditing(null);
+		if (next === original) return;
+		if (await send("PATCH", { key: keyOf(page.table, row), values: { [column.name]: next } })) changed();
+	};
+
+	const saveNew = async () => {
+		// Empty fields are left out so the column default (an id, a timestamp) applies.
+		const values = Object.fromEntries(Object.entries(adding).filter(([, value]) => value !== ""));
+		if (await send("POST", { values })) {
+			setAdding(null);
+			toast("Row added");
+			changed();
+			loadTables();
+		}
+	};
+
+	const remove = async (row) => {
+		if (!confirm(env === "live" ? "Delete this row from the live app?" : "Delete this row?")) return;
+		if (await send("DELETE", { key: keyOf(page.table, row) })) changed();
+	};
+
+	const runQuery = async () => {
+		setBusy(true);
+		setResult(null);
+		try {
+			setResult(await api(`/projects/${id}/data/sql?env=${env}`, { method: "POST", body: { sql } }));
+			loadTables();
+		} catch (err) {
+			setResult({ error: err.message });
+		}
+		setBusy(false);
+	};
+
+	const tables = info?.tables ?? [];
+	const table = page?.table;
+	const editable = Boolean(info?.canWrite && table?.primaryKey.length);
+	const total = page?.total ?? 0;
+
+	return html`<div class="code data" hidden=${!active}>
+		<aside class="tree">
+			<div class="tree-head">
+				<span>Tables</span>
+				<button class="icon-btn" title="Refresh" onClick=${() => loadTables()}>${icon("refresh")}</button>
+			</div>
+			<div class="tree-filter">
+				<div class="seg env-seg" role="tablist" style=${`--index:${env === "live" ? 1 : 0};--count:2`}>
+					<button role="tab" aria-selected=${env === "preview"} onClick=${() => switchEnv("preview")}>Preview</button>
+					<button role="tab" aria-selected=${env === "live"} onClick=${() => switchEnv("live")}>Live</button>
+				</div>
+			</div>
+			<div class="tree-list">
+				${info === null && html`<div class="empty"><span class="spinner"></span></div>`}
+				${info?.missing && html`<div class="empty small">${icon("globe")} The live database is created the first time you publish.</div>`}
+				${info && !info.missing && tables.length === 0 && !error &&
+				html`<div class="empty small">${icon("table")} No tables yet. Ask the agent for a feature that saves data.</div>`}
+				${tables.map(
+					(t) => html`<button
+						class="tree-row"
+						aria-selected=${selected === t.name}
+						title=${t.name}
+						onClick=${() => {
+							setSelected(t.name);
+							setOffset(0);
+						}}
+					>
+						${icon("table")}<span class="grow">${t.name}</span><span class="count">${t.rowCount}</span>
+					</button>`,
+				)}
+			</div>
+		</aside>
+		<section class="editor-pane">
+			<div class="editor-bar">
+				<div class="crumbs">
+					${table ? html`<b>${table.name}</b><span class="faint">· ${total} ${total === 1 ? "row" : "rows"}</span>` : html`<span>${env === "live" ? "Live data" : "Preview data"}</span>`}
+				</div>
+				${table && info?.canWrite &&
+				html`<button class="btn sm" disabled=${busy || adding} onClick=${() => setAdding({})}>${icon("plus")} Add row</button>`}
+				<button class="btn sm" aria-pressed=${sqlOpen} onClick=${() => setSqlOpen((open) => !open)}>${icon("terminal")} SQL</button>
+			</div>
+			${env === "live" && info && !info.missing &&
+			html`<div class=${`banner ${info.canWrite ? "warn" : ""}`}>
+				${icon("globe")}
+				${info.canWrite ? "This is the published app's real data. Changes apply right away." : "Live data is read-only for you. The app's owner or an admin can change it."}
+			</div>`}
+			${env === "preview" && html`<div class="banner subtle">${icon("eye")} Test data for the preview. The published app has its own database.</div>`}
+			${error && html`<div class="error" style="padding:8px 14px">${error}</div>`}
+			<div class="grid-wrap">
+				${table &&
+				html`<table class="data-grid">
+					<thead>
+						<tr>
+							${table.columns.map(
+								(c) => html`<th title=${c.type}>
+									${c.name}${table.primaryKey.includes(c.name) && html`<span class="pk">key</span>`}
+									<span class="type">${c.type}</span>
+								</th>`,
+							)}
+							${editable && html`<th class="actions"></th>`}
+						</tr>
+					</thead>
+					<tbody>
+						${adding &&
+						html`<tr class="adding">
+							${table.columns.map(
+								(c) => html`<td>
+									<input
+										class="cell-input"
+										placeholder=${c.hasDefault ? "default" : c.nullable ? "NULL" : ""}
+										value=${adding[c.name] ?? ""}
+										onInput=${(e) => setAdding({ ...adding, [c.name]: e.target.value })}
+										onKeyDown=${(e) => {
+											if (e.key === "Enter") saveNew();
+											if (e.key === "Escape") setAdding(null);
+										}}
+									/>
+								</td>`,
+							)}
+							<td class="actions">
+								<div class="row" style="gap:4px;flex-wrap:nowrap">
+									<button class="btn sm primary" disabled=${busy} onClick=${saveNew}>Save</button>
+									<button class="icon-btn" title="Cancel" onClick=${() => setAdding(null)}>${icon("x")}</button>
+								</div>
+							</td>
+						</tr>`}
+						${(page?.rows ?? []).map(
+							(row) => html`<tr>
+								${table.columns.map((c) =>
+									editing?.row === row && editing.column.name === c.name
+										? html`<td class="editing">
+												<input
+													class="cell-input"
+													ref=${(el) => el && document.activeElement !== el && el.focus()}
+													placeholder=${c.nullable ? "NULL" : ""}
+													value=${editing.value}
+													onInput=${(e) => setEditing({ ...editing, value: e.target.value })}
+													onBlur=${saveCell}
+													onKeyDown=${(e) => {
+														if (e.key === "Enter") e.target.blur();
+														if (e.key === "Escape") setEditing(null);
+													}}
+												/>
+											</td>`
+										: html`<td
+												class=${editable ? "editable" : ""}
+												title=${row[c.name] ?? "NULL"}
+												onClick=${() => editable && !busy && setEditing({ row, column: c, value: row[c.name] ?? "" })}
+											>
+												<${Cell} value=${row[c.name]} />
+											</td>`,
+								)}
+								${editable &&
+								html`<td class="actions">
+									<button class="icon-btn" title="Delete row" onClick=${() => remove(row)}>${icon("trash")}</button>
+								</td>`}
+							</tr>`,
+						)}
+					</tbody>
+				</table>`}
+				${table && page && page.rows.length === 0 && !adding && html`<div class="empty small">This table is empty.</div>`}
+				${table && info?.canWrite && !table.primaryKey.length &&
+				html`<p class="faint" style="padding:8px 14px;font-size:12px">This table has no primary key, so rows can only be changed with SQL.</p>`}
+			</div>
+			${total > PAGE_SIZE &&
+			html`<div class="pager">
+				<span class="faint">${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} of ${total}</span>
+				<button class="btn sm" disabled=${offset === 0} onClick=${() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Previous</button>
+				<button class="btn sm" disabled=${offset + PAGE_SIZE >= total} onClick=${() => setOffset(offset + PAGE_SIZE)}>Next</button>
+			</div>`}
+			${sqlOpen &&
+			html`<div class="sql-panel">
+				<div class="sql-box">
+					<textarea
+						class="input mono"
+						spellcheck="false"
+						placeholder=${info?.canWrite ? "select * from ...   (⌘ Enter to run)" : "select * from ...   (read-only, ⌘ Enter to run)"}
+						value=${sql}
+						onInput=${(e) => setSql(e.target.value)}
+						onKeyDown=${(e) => {
+							if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+								e.preventDefault();
+								runQuery();
+							}
+						}}
+					></textarea>
+					<button class="btn sm primary" disabled=${busy || !sql.trim()} onClick=${runQuery}>${icon("play")} Run</button>
+				</div>
+				${result?.error && html`<pre class="log boxed error">${result.error}</pre>`}
+				${result && !result.error &&
+				html`<div class="sql-result">
+					${result.columns.length > 0
+						? html`<table class="data-grid">
+								<thead>
+									<tr>
+										${result.columns.map((name) => html`<th>${name}</th>`)}
+									</tr>
+								</thead>
+								<tbody>
+									${result.rows.map(
+										(row) => html`<tr>
+											${row.map((value) => html`<td><${Cell} value=${value} /></td>`)}
+										</tr>`,
+									)}
+								</tbody>
+							</table>`
+						: html`<p class="faint" style="padding:8px 2px;font-size:12.5px">${result.command} · ${result.rowCount ?? 0} rows affected</p>`}
+					${result.truncated && html`<p class="faint" style="font-size:12px">Showing the first 500 rows.</p>`}
+				</div>`}
+			</div>`}
 		</section>
 	</div>`;
 }

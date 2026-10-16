@@ -11,6 +11,44 @@ data "aws_vpc" "default" {
   default = true
 }
 
+data "aws_caller_identity" "current" {}
+
+# Nightly database dumps from the server. Private, encrypted, and deleted after backup_retention_days.
+resource "aws_s3_bucket" "backups" {
+  bucket = "${var.name}-backups-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
+  # ./deploy.sh destroy asks for confirmation and removes everything, backups included.
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_public_access_block" "backups" {
+  bucket                  = aws_s3_bucket.backups.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "backups" {
+  bucket = aws_s3_bucket.backups.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "backups" {
+  bucket = aws_s3_bucket.backups.id
+  rule {
+    id     = "expire"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = var.backup_retention_days
+    }
+  }
+}
+
 resource "random_password" "secret_key" {
   length  = 48
   special = false
@@ -39,6 +77,8 @@ resource "aws_ssm_parameter" "env" {
     "AGENCY_MODEL=${var.agency_model}",
     "AGENCY_SANDBOX_MEMORY=${var.sandbox_memory}",
     "AGENCY_SANDBOX_CPUS=${var.sandbox_cpus}",
+    "AGENCY_BACKUP_BUCKET=${aws_s3_bucket.backups.bucket}",
+    "AGENCY_AWS_REGION=${var.aws_region}",
   ])
 }
 
@@ -61,6 +101,19 @@ resource "aws_iam_role_policy" "read_env" {
   policy = jsonencode({
     Version   = "2012-10-17"
     Statement = [{ Effect = "Allow", Action = ["ssm:GetParameter"], Resource = aws_ssm_parameter.env.arn }]
+  })
+}
+
+# The host (not the containers: IMDS allows one network hop) writes backups and can read them back to restore.
+resource "aws_iam_role_policy" "backups" {
+  name = "backups"
+  role = aws_iam_role.instance.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject"], Resource = "${aws_s3_bucket.backups.arn}/*" },
+      { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.backups.arn },
+    ]
   })
 }
 
@@ -133,6 +186,12 @@ resource "aws_instance" "agency" {
     repo_ref      = var.repo_ref
   })
   user_data_replace_on_change = false
+
+  # A newer Ubuntu image or a changed boot script must never replace the running server (its disk holds
+  # all data). They apply to new servers only; updates reach existing ones through ./deploy.sh update.
+  lifecycle {
+    ignore_changes = [ami, user_data]
+  }
 
   tags = { Name = var.name }
 }

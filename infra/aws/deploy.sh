@@ -6,6 +6,7 @@
 #   ./deploy.sh stop       stop the server to save money (data, address and DNS stay)
 #   ./deploy.sh start      start it again; the stack comes back on its own
 #   ./deploy.sh status     show whether the server is running
+#   ./deploy.sh backup     back up all databases now (also runs every night on the server)
 #   ./deploy.sh destroy    delete everything this script created
 #
 # Secrets (Claude API key, Cloudflare token, admin password) are read from the environment or
@@ -169,7 +170,8 @@ update)
 	check_aws
 	info "Running agency-deploy on the server"
 	aws ssm send-command --region "$(region)" --instance-ids "$(terraform output -raw instance_id)" \
-		--document-name AWS-RunShellScript --parameters 'commands=["/usr/local/bin/agency-deploy"]' \
+		--document-name AWS-RunShellScript \
+		--parameters 'commands=["/usr/local/bin/agency-deploy","/opt/agency-src/infra/aws/host/setup.sh"]' \
 		--query Command.CommandId --output text
 	echo "Started. Follow it in the AWS console under Systems Manager > Run Command."
 	;;
@@ -196,14 +198,22 @@ status)
 		echo "Site:   not answering"
 	fi
 	;;
+backup)
+	check_aws
+	info "Backing up all databases on the server"
+	aws ssm send-command --region "$(region)" --instance-ids "$(terraform output -raw instance_id)" \
+		--document-name AWS-RunShellScript --parameters 'commands=["/usr/local/bin/agency-backup"]' \
+		--query Command.CommandId --output text
+	echo "Started. Backups land in $(terraform output -raw backup_bucket 2>/dev/null || echo 'the backup bucket')/postgres/."
+	;;
 destroy)
 	check_aws
 	tf_secret_vars
-	read -rp "Delete the Agency server, its data and DNS records? Type the domain to confirm: " confirm
+	read -rp "Delete the Agency server, its data, backups and DNS records? Type the domain to confirm: " confirm
 	[ "$confirm" = "$(grep -E '^base_domain' "$SETTINGS" | cut -d'"' -f2)" ] || fail "Cancelled"
 	terraform destroy -input=false -auto-approve
 	;;
 *)
-	fail "Unknown command '$ACTION'. Use deploy, update, stop, start, status or destroy."
+	fail "Unknown command '$ACTION'. Use deploy, update, stop, start, status, backup or destroy."
 	;;
 esac

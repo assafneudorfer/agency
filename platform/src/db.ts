@@ -86,6 +86,10 @@ create table if not exists usage_events (
 	created_at timestamptz not null default now()
 );
 create index if not exists usage_events_user_time on usage_events (user_id, created_at);
+
+-- Published apps get their own database, separate from the preview's.
+alter table projects add column if not exists live_db_name text;
+alter table projects add column if not exists live_db_password_enc text;
 `;
 
 export async function migrate(): Promise<void> {

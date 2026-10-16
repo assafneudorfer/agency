@@ -14,3 +14,8 @@ output "shell" {
   description = "Open a shell on the server without SSH"
   value       = "aws ssm start-session --region ${var.aws_region} --target ${aws_instance.agency.id}"
 }
+
+output "backup_bucket" {
+  description = "S3 bucket with the nightly database backups"
+  value       = aws_s3_bucket.backups.bucket
+}

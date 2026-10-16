@@ -2,7 +2,7 @@ import { appHost, config } from "./config.ts";
 import { query, queryOne } from "./db.ts";
 import { docker, envArgs, execIn, labelArgs, routeLabels, spawnDocker } from "./docker.ts";
 import { bridgeFor } from "./agent.ts";
-import { appContainerName, appEnv, type Project, sandboxName } from "./projects.ts";
+import { appContainerName, appEnv, ensureLiveDatabase, type Project, sandboxName } from "./projects.ts";
 
 export interface Deployment {
 	id: number;
@@ -68,8 +68,9 @@ function buildImage(project: Project, tag: string): Promise<void> {
 
 async function runApp(project: Project, image: string): Promise<void> {
 	const name = appContainerName(project);
-	await docker(["rm", "-f", name], { allowFailure: true });
 	const env = appEnv(project);
+	const databaseUrl = await ensureLiveDatabase(project);
+	await docker(["rm", "-f", name], { allowFailure: true });
 	await docker([
 		"run",
 		"-d",
@@ -82,7 +83,7 @@ async function runApp(project: Project, image: string): Promise<void> {
 		"--memory",
 		config.appMemory,
 		...envArgs({
-			DATABASE_URL: env.DATABASE_URL,
+			DATABASE_URL: databaseUrl,
 			AGENCY_GATEWAY_URL: env.AGENCY_GATEWAY_URL,
 			AGENCY_APP_TOKEN: env.AGENCY_APP_TOKEN,
 		}),
@@ -114,6 +115,7 @@ export async function publish(project: Project, userId: string, onLog: (line: st
 		const image = `agency-app-${project.slug}:v${version}`;
 		onLog(`Packaging image ${image}`);
 		await buildImage(project, image);
+		await ensureLiveDatabase(project, onLog);
 		onLog(`Starting ${appHost(project.slug)}`);
 		await runApp(project, image);
 		await query("update deployments set active = false where project_id = $1", [project.id]);

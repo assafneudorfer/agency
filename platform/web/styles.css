@@ -3593,3 +3593,126 @@ p.small {
 		background: var(--surface-2);
 	}
 }
+
+/* Chat mode and model, in the composer */
+
+.composer-opts {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.mode-seg button {
+	height: 22px;
+	padding: 0 9px;
+	font-size: 12px;
+}
+
+.model-pick {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	height: 28px;
+	padding: 0 8px;
+	border-radius: 8px;
+	color: var(--text-2);
+	font-size: 12.5px;
+	font-weight: 500;
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		background-color 150ms ease,
+		color 150ms ease;
+}
+
+.model-pick span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.model-pick .icon {
+	flex: none;
+	width: 14px;
+	height: 14px;
+}
+
+.model-pick .caret {
+	width: 12px;
+	height: 12px;
+	color: var(--text-3);
+}
+
+.model-pick.static {
+	cursor: default;
+}
+
+/* The native select sits invisibly on top, so phones get their own picker. */
+.model-pick select {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	opacity: 0;
+	cursor: pointer;
+	font-size: 16px;
+}
+
+.model-pick:focus-within {
+	box-shadow: var(--focus);
+}
+
+@media (hover: hover) and (pointer: fine) {
+	.model-pick:not(.static):hover {
+		background: var(--surface-2);
+		color: var(--text);
+	}
+}
+
+.plan-approve {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	font-size: 12.5px;
+}
+
+/* Settings > Models */
+
+.model-check {
+	flex: 1;
+	min-width: 0;
+	align-items: flex-start;
+	gap: 12px;
+	cursor: pointer;
+}
+
+.model-check input {
+	margin-top: 3px;
+}
+
+.model-row.off .title {
+	color: var(--text-2);
+}
+
+@media (max-width: 760px) {
+	/* On a phone the options get their own row above the text field. */
+	.chat-box .composer-opts {
+		flex-basis: 100%;
+		padding: 8px 8px 0 12px;
+	}
+
+	.mode-seg button {
+		height: 26px;
+		padding: 0 12px;
+	}
+
+	.model-row {
+		flex-wrap: wrap;
+	}
+
+	.model-row .btn {
+		margin-left: 30px;
+	}
+}

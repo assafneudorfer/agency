@@ -35,6 +35,9 @@ export const config = {
 		.split(",")
 		.map((name) => name.trim())
 		.filter(Boolean),
+	// All-AWS setup: file with short-lived Bedrock credentials written by the host, and the Bedrock region.
+	awsCredentialsFile: process.env.AGENCY_AWS_CREDENTIALS_FILE ?? "",
+	awsRegion: optional("AGENCY_AWS_REGION", "us-east-1"),
 	// Monthly agent budget in US dollars for newly added members. Admins can change it per user.
 	defaultBudgetUsd: Number(optional("AGENCY_DEFAULT_BUDGET_USD", "20")),
 	sandboxMemory: optional("AGENCY_SANDBOX_MEMORY", "3g"),

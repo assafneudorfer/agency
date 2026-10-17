@@ -10,3 +10,9 @@ repo_ref           = "main"
 #   export TF_VAR_cloudflare_dns_api_token=... # for Traefik certificates (can be the same token)
 #   export TF_VAR_admin_password=...
 #   export TF_VAR_anthropic_api_key=...
+
+# All on AWS instead (Route 53 + Amazon Bedrock, no keys): replace cloudflare_zone_id with
+#   dns_provider    = "route53"
+#   llm_provider    = "bedrock"
+#   route53_zone_id = "Z0123456789ABCDEFGHIJ"
+#   agency_model    = "amazon-bedrock/us.anthropic.claude-opus-4-8"

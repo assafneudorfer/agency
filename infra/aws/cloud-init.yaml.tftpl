@@ -24,11 +24,12 @@ write_files:
       umask 077
       aws ssm get-parameter --region "${region}" --name "${env_parameter}" --with-decryption \
         --query Parameter.Value --output text > .env
+      # Host pieces outside compose: the nightly database backup and, on all-AWS setups, the Route 53
+      # and Bedrock credentials, which have to exist before Traefik asks for its certificate.
+      if [ -x infra/aws/host/setup.sh ]; then infra/aws/host/setup.sh; fi
       docker compose --profile build build sandbox
       docker compose up -d --build --remove-orphans
       docker image prune -f >/dev/null
-      # Host pieces outside compose, such as the nightly database backup.
-      if [ -x infra/aws/host/setup.sh ]; then infra/aws/host/setup.sh; fi
 
 runcmd:
   # Swap lets small test instances build the images and run a sandbox without running out of memory.

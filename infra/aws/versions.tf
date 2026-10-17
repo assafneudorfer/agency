@@ -20,5 +20,8 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Reads CLOUDFLARE_API_TOKEN from the environment. The token needs Zone:DNS:Edit on the zone.
-provider "cloudflare" {}
+# The token needs Zone:DNS:Edit on the zone. With Route 53 nothing calls Cloudflare, but the provider
+# still wants a well-formed token, so it gets a placeholder.
+provider "cloudflare" {
+  api_token = var.cloudflare_dns_api_token != "" ? var.cloudflare_dns_api_token : "unused-with-route53-00000000000000000000"
+}

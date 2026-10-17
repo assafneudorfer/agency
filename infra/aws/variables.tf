@@ -25,9 +25,36 @@ variable "base_domain" {
   type        = string
 }
 
-variable "cloudflare_zone_id" {
-  description = "Cloudflare zone that contains base_domain"
+variable "dns_provider" {
+  description = "cloudflare (records and certificate through a Cloudflare token) or route53 (all on AWS, no stored keys)"
   type        = string
+  default     = "cloudflare"
+  validation {
+    condition     = contains(["cloudflare", "route53"], var.dns_provider)
+    error_message = "dns_provider must be cloudflare or route53."
+  }
+}
+
+variable "llm_provider" {
+  description = "anthropic (Claude API key) or bedrock (Claude on Amazon Bedrock through the server's IAM role, no stored keys)"
+  type        = string
+  default     = "anthropic"
+  validation {
+    condition     = contains(["anthropic", "bedrock"], var.llm_provider)
+    error_message = "llm_provider must be anthropic or bedrock."
+  }
+}
+
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone that contains base_domain (dns_provider = cloudflare)"
+  type        = string
+  default     = ""
+}
+
+variable "route53_zone_id" {
+  description = "Route 53 public hosted zone that contains base_domain (dns_provider = route53)"
+  type        = string
+  default     = ""
 }
 
 variable "cloudflare_proxied" {
@@ -65,9 +92,10 @@ variable "acme_email" {
 }
 
 variable "cloudflare_dns_api_token" {
-  description = "Token Traefik uses for the Let's Encrypt DNS challenge (Zone:DNS:Edit)"
+  description = "Token for the DNS records and Traefik's Let's Encrypt DNS challenge (Zone:DNS:Edit), when dns_provider = cloudflare"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "admin_email" {
@@ -103,7 +131,7 @@ variable "sandbox_cpus" {
 }
 
 variable "agency_model" {
-  description = "Optional pi model pattern, for example anthropic/claude-sonnet-4-5"
+  description = "Optional pi model pattern, for example anthropic/claude-sonnet-4-5 or amazon-bedrock/us.anthropic.claude-opus-4-8"
   type        = string
   default     = ""
 }

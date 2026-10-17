@@ -66,6 +66,30 @@ function textOf(content) {
 		.join("");
 }
 
+// The platform appends where each attachment was saved; the chat shows them as chips instead.
+const ATTACHMENTS_HEADING = "\n\nAttached files (saved in the workspace):\n";
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+
+function userItem(content) {
+	const raw = textOf(content);
+	const at = raw.lastIndexOf(ATTACHMENTS_HEADING);
+	const paths =
+		at === -1
+			? []
+			: raw
+					.slice(at + ATTACHMENTS_HEADING.length)
+					.split("\n")
+					.filter((line) => line.startsWith("- "))
+					.map((line) => line.slice(2));
+	const images = (Array.isArray(content) ? content : [])
+		.filter((block) => block.type === "image" && block.data)
+		.map((block) => `data:${block.mimeType};base64,${block.data}`);
+	// Images the model saw are drawn as thumbnails; every other file is a chip.
+	const files = images.length ? paths.filter((path) => !IMAGE_EXT.test(path)) : paths;
+	const text = at === -1 ? raw : raw.slice(0, at);
+	return { kind: "user", text: paths.length && text === "See the attached files." ? "" : text, images, files };
+}
+
 function toolLabel(name, args = {}) {
 	const path = args.path ?? args.file_path;
 	if (name === "write") return `Wrote ${path}`;
@@ -101,7 +125,7 @@ function itemsFromMessages(messages) {
 		if (message.role === "toolResult" && message.isError) toolStatus.set(message.toolCallId, "failed");
 	}
 	for (const message of messages) {
-		if (message.role === "user") items.push({ kind: "user", text: textOf(message.content) });
+		if (message.role === "user") items.push(userItem(message.content));
 		if (message.role === "assistant") {
 			const item = assistantItem(message);
 			item.tools = item.tools.map((t) => ({ ...t, status: toolStatus.get(t.id) ?? "done" }));
@@ -116,7 +140,7 @@ function applyEvent(items, event) {
 	const last = next[next.length - 1];
 	switch (event.type) {
 		case "message_start":
-			if (event.message.role === "user") next.push({ kind: "user", text: textOf(event.message.content) });
+			if (event.message.role === "user") next.push(userItem(event.message.content));
 			if (event.message.role === "assistant") next.push({ kind: "assistant", text: "", tools: [], thinking: false, error: null, live: true });
 			return next;
 		case "message_update": {
@@ -198,6 +222,7 @@ const ICONS = {
 	more: '<circle cx="5" cy="12" r="1.25"/><circle cx="12" cy="12" r="1.25"/><circle cx="19" cy="12" r="1.25"/>',
 	message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
 	wand: '<path d="m15 4 5 5"/><path d="M3 21 15.5 8.5"/><path d="M8 2v3"/><path d="M6.5 3.5h3"/><path d="M20 14v3"/><path d="M18.5 15.5h3"/><path d="M11 3l.5 1"/>',
+	paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
 	upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
 	infinity: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4z"/>',
 };
@@ -532,7 +557,17 @@ function toolIcon(label) {
 }
 
 function ChatItem({ item }) {
-	if (item.kind === "user") return html`<div class="msg msg-user">${item.text}</div>`;
+	if (item.kind === "user") {
+		const attached = item.images.length > 0 || item.files.length > 0;
+		return html`<div class="msg msg-user-wrap">
+			${attached &&
+			html`<div class="msg-attachments">
+				${item.images.map((src) => html`<a class="attach-thumb" href=${src} target="_blank" rel="noopener"><img src=${src} alt="" /></a>`)}
+				${item.files.map((path) => html`<span class="attach-chip" title=${path}>${icon("file")}<span>${path.split("/").pop()}</span></span>`)}
+			</div>`}
+			${item.text && html`<div class="msg-user">${item.text}</div>`}
+		</div>`;
+	}
 	return html`<div class="msg">
 		${item.thinking && !item.text && item.tools.length === 0 && html`<div class="thinking"><span class="spinner"></span> Thinking</div>`}
 		${item.text && html`<div class="msg-assistant">${item.text}</div>`}
@@ -549,11 +584,27 @@ function ChatItem({ item }) {
 	</div>`;
 }
 
+// Mirrors the server's limits in attachments.ts, so a too-large file is caught before uploading.
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const PREVIEWABLE = /^image\/(png|jpeg|gif|webp)$/;
+let attachmentKey = 0;
+
+function pastedName(file) {
+	const ext = (file.type.split("/")[1] ?? "png").replace("jpeg", "jpg");
+	const stamp = new Date().toISOString().slice(0, 19).replace("T", " ").replace(/:/g, ".");
+	return `Pasted ${stamp}.${ext}`;
+}
+
 function Builder({ id }) {
 	const [project, setProject] = useState(null);
 	const [items, setItems] = useState([]);
 	const [running, setRunning] = useState(false);
 	const [input, setInput] = useState("");
+	const [attachments, setAttachments] = useState([]);
+	const [sending, setSending] = useState(false);
+	const [dragging, setDragging] = useState(false);
+	const picker = useRef(null);
 	const [error, setError] = useState("");
 	const [panel, setPanel] = useState(null);
 	const phone = usePhone();
@@ -617,18 +668,58 @@ function Builder({ id }) {
 		if (tab === "preview") setFresh(false);
 	}, [tab]);
 
+	const addFiles = (list) => {
+		const files = [...(list ?? [])];
+		if (files.length === 0) return;
+		const tooBig = files.find((file) => file.size > MAX_ATTACHMENT_BYTES);
+		setError(tooBig ? `${tooBig.name} is larger than 10 MB` : "");
+		const added = files
+			.filter((file) => file.size <= MAX_ATTACHMENT_BYTES)
+			.map((file) => ({ key: ++attachmentKey, file, url: PREVIEWABLE.test(file.type) ? URL.createObjectURL(file) : null }));
+		setAttachments((current) => {
+			const next = [...current, ...added];
+			if (next.length > MAX_ATTACHMENTS) setError(`Attach at most ${MAX_ATTACHMENTS} files at a time`);
+			for (const extra of next.slice(MAX_ATTACHMENTS)) if (extra.url) URL.revokeObjectURL(extra.url);
+			return next.slice(0, MAX_ATTACHMENTS);
+		});
+	};
+	const removeAttachment = (key) =>
+		setAttachments((current) =>
+			current.filter((a) => {
+				if (a.key === key && a.url) URL.revokeObjectURL(a.url);
+				return a.key !== key;
+			}),
+		);
+
 	const send = async () => {
 		const message = input.trim();
-		if (!message) return;
+		const files = attachments;
+		if ((!message && files.length === 0) || sending) return;
 		setInput("");
+		setAttachments([]);
 		setError("");
 		try {
-			await api(`/projects/${id}/prompt`, { method: "POST", body: { message } });
+			if (files.length) {
+				setSending(true);
+				const form = new FormData();
+				form.append("message", message);
+				for (const a of files) form.append("files", a.file, a.file.name || "pasted file");
+				const response = await fetch(`/api/projects/${id}/prompt`, { method: "POST", body: form });
+				const data = await response.json().catch(() => ({}));
+				if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
+				for (const a of files) if (a.url) URL.revokeObjectURL(a.url);
+			} else {
+				await api(`/projects/${id}/prompt`, { method: "POST", body: { message } });
+			}
 		} catch (err) {
 			setError(err.message);
 			setInput(message);
+			setAttachments(files);
+		} finally {
+			setSending(false);
 		}
 	};
+	const dragHasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes("Files");
 
 	if (!project) {
 		return html`<div class="page">${error ? html`<p class="error">${error}</p>` : html`<div class="empty"><span class="spinner"></span></div>`}</div>`;
@@ -684,7 +775,19 @@ function Builder({ id }) {
 			</div>
 		</header>
 		<div class="workbench" data-tab=${tab}>
-			<section class="chat">
+			<section
+				class=${`chat${dragging ? " dragging" : ""}`}
+				onDragEnter=${(e) => canEdit && dragHasFiles(e) && (e.preventDefault(), setDragging(true))}
+				onDragOver=${(e) => canEdit && dragHasFiles(e) && e.preventDefault()}
+				onDragLeave=${(e) => !e.currentTarget.contains(e.relatedTarget) && setDragging(false)}
+				onDrop=${(e) => {
+					if (!canEdit || !dragHasFiles(e)) return;
+					e.preventDefault();
+					setDragging(false);
+					addFiles(e.dataTransfer.files);
+				}}
+			>
+				${dragging && html`<div class="drop-overlay">${icon("paperclip")}<span>Drop files to attach</span></div>`}
 				<div class="messages" ref=${scroller}>
 					${items.length === 0 &&
 					html`<div class="chat-empty">
@@ -697,11 +800,26 @@ function Builder({ id }) {
 					? html`<div class="chat-input">
 					${error && html`<div class="error">${error}</div>`}
 					<div class="chat-box">
+						${attachments.length > 0 &&
+						html`<div class="attach-strip">
+							${attachments.map(
+								(a) => html`<div class=${`attach-pending${a.url ? " image" : ""}`} key=${a.key} title=${a.file.name}>
+									${a.url ? html`<img src=${a.url} alt="" />` : html`${icon("file")}<span class="attach-meta"><span class="attach-name">${a.file.name}</span><span class="faint">${bytes(a.file.size)}</span></span>`}
+									<button class="attach-remove" title=${`Remove ${a.file.name}`} onClick=${() => removeAttachment(a.key)}>${icon("x")}</button>
+								</div>`,
+							)}
+						</div>`}
 						<textarea
 							placeholder=${running ? "Add an instruction for after this step..." : "Ask for a change..."}
 							enterkeyhint="send"
 							value=${input}
 							onInput=${(e) => setInput(e.target.value)}
+							onPaste=${(e) => {
+								const files = [...(e.clipboardData?.files ?? [])];
+								if (files.length === 0) return;
+								e.preventDefault();
+								addFiles(files.map((file) => (file.name && file.name !== "image.png" ? file : new File([file], pastedName(file), { type: file.type }))));
+							}}
 							onKeyDown=${(e) => {
 								if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
 									e.preventDefault();
@@ -710,10 +828,23 @@ function Builder({ id }) {
 							}}
 						></textarea>
 						<div class="bar">
+							<input
+								ref=${picker}
+								type="file"
+								multiple
+								hidden
+								onChange=${(e) => {
+									addFiles(e.target.files);
+									e.target.value = "";
+								}}
+							/>
+							<button class="icon-btn attach-btn" title="Attach files or images" onClick=${() => picker.current?.click()}>${icon("paperclip")}</button>
 							<span class="faint grow hint">Shift + Enter for a new line</span>
 							${running &&
 							html`<button class="btn sm" onClick=${() => api(`/projects/${id}/abort`, { method: "POST" })}>${icon("stop")} Stop</button>`}
-							<button class="btn primary send" title="Send" disabled=${!input.trim()} onClick=${send}>${icon("arrowUp")}</button>
+							<button class="btn primary send" title="Send" disabled=${(!input.trim() && attachments.length === 0) || sending} onClick=${send}>
+								${sending ? html`<span class="spinner"></span>` : icon("arrowUp")}
+							</button>
 						</div>
 					</div>
 				</div>`

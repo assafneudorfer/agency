@@ -116,7 +116,9 @@ Under **Settings**, an admin connects the organization's identity provider over 
 
 ## GitHub
 
-Under **Settings**, an admin saves a GitHub token (a fine-grained token owned by the organization, with Contents and Administration read and write) and the organization's name; GitHub Enterprise Server works with its API URL. In the builder, the **GitHub** button links the app to a new private repository or an existing one and pushes its version history; it can push every new version automatically. The token stays in the platform: the app's history is copied out of the sandbox as a git bundle and pushed from the platform container. A branch with commits made outside Agency is not overwritten unless someone chooses **Overwrite**.
+Under **Settings**, an organization owner enters the organization's name and clicks **Connect GitHub**. Agency sends them to GitHub with a [GitHub App manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest); they confirm creating a private app in the organization (permissions: Contents and Administration write, Metadata read), then confirm installing it, and land back in Settings connected. Nothing is copied by hand. The app's private key is stored encrypted, and pushes use installation tokens that expire after an hour; which repositories the app can use is chosen in its installation settings on GitHub. **Disconnect** uninstalls it; an owner can then delete the app on GitHub. GitHub Enterprise Server works with its address. A token (fine-grained, owned by the organization, with Contents and Administration read and write) still works instead, under **Use a token instead**, and is the way to use a personal account.
+
+In the builder, the **GitHub** button links the app to a new private repository or an existing one and pushes its version history; it can push every new version automatically. Credentials stay in the platform: the app's history is copied out of the sandbox as a git bundle and pushed from the platform container. A branch with commits made outside Agency is not overwritten unless someone chooses **Overwrite**.
 
 ## Security notes for this MVP
 

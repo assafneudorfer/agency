@@ -4,7 +4,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { compress } from "hono/compress";
 import { streamSSE } from "hono/streaming";
-import { type AgentEvent, bridgeFor, dropBridge } from "./agent.ts";
+import { type AgentEvent, bridgeFor, CHAT_MODES, type ChatMode, dropBridge } from "./agent.ts";
 import { type Attachment, checkAttachments, modelImages, promptWithAttachments, saveAttachments } from "./attachments.ts";
 import { AccessError, assertRole, atLeast, getSharing, type ProjectRole, projectRole, setMember, setTeamAccess, visibleProjects } from "./access.ts";
 import { closeDataPools, DataError, deleteRow, insertRow, listTables, readRows, runSql, updateRow } from "./appdata.ts";
@@ -73,6 +73,7 @@ import {
 	setAutoPush,
 	unlinkRepository,
 } from "./github.ts";
+import { allowedModels, ModelError, modelSettings, saveModelSettings } from "./models.ts";
 import { listDeployments, publish, rollback, unpublish } from "./publish.ts";
 import {
 	createSkill,
@@ -127,7 +128,7 @@ app.onError((error, c) => {
 	if (error instanceof DataError) return c.json({ error: error.message }, 400);
 	if (error instanceof AccessError) return c.json({ error: error.message }, 403);
 	if (error instanceof FileError) return c.json({ error: error.message }, 400);
-	if (error instanceof GitHubError || error instanceof SsoError || error instanceof SkillError) return c.json({ error: error.message }, 400);
+	if (error instanceof GitHubError || error instanceof SsoError || error instanceof SkillError || error instanceof ModelError) return c.json({ error: error.message }, 400);
 	if (error instanceof NotFoundError) return c.json({ error: error.message }, 404);
 	console.error(error);
 	return c.json({ error: errorMessage(error) }, 500);
@@ -244,6 +245,9 @@ api.get("/me", async (c) =>
 
 api.get("/usage", async (c) => c.json(await usageDetail(c.get("user").id)));
 
+/** The models members may pick in the chat, and the organization default. */
+api.get("/models", async (c) => c.json(await allowedModels()));
+
 // ---------------------------------------------------------------------------
 // Projects
 
@@ -324,26 +328,30 @@ api.get("/projects/:id/messages", async (c) => {
 	return c.json({ messages: await bridgeFor(project).messages(), running: bridgeFor(project).running });
 });
 
-/** JSON `{ message }`, or multipart with a `message` field and `files` (chat attachments). */
+/**
+ * JSON `{ message, mode?, model? }`, or multipart with those fields and `files` (chat attachments).
+ * `mode` is auto (build), plan or chat; `model` is a catalog key, used if an admin allowed it.
+ */
 api.post("/projects/:id/prompt", async (c) => {
 	const { project } = await projectFor(c, "editor");
-	let message = "";
+	let fields: Record<string, unknown>;
 	const files: Attachment[] = [];
 	if ((c.req.header("Content-Type") ?? "").startsWith("multipart/form-data")) {
-		const form = await c.req.parseBody({ all: true });
-		message = String(form.message ?? "");
-		for (const entry of [form.files ?? []].flat()) {
+		fields = await c.req.parseBody({ all: true });
+		for (const entry of [fields.files ?? []].flat()) {
 			if (entry instanceof File) files.push({ name: entry.name, type: entry.type, data: Buffer.from(await entry.arrayBuffer()) });
 		}
 	} else {
-		message = String((await c.req.json<{ message?: string }>()).message ?? "");
+		fields = await c.req.json<Record<string, unknown>>();
 	}
-	message = message.trim();
+	const message = String(fields.message ?? "").trim();
+	const mode = CHAT_MODES.find((m) => m === fields.mode) ?? ("auto" as ChatMode);
+	const model = typeof fields.model === "string" ? fields.model : undefined;
 	if (!message && files.length === 0) return c.json({ error: "Message is empty" }, 400);
 	checkAttachments(files);
 	await assertBudget(c.get("user").id);
 	const paths = await saveAttachments(project, files);
-	const result = await bridgeFor(project).prompt(promptWithAttachments(message, paths), c.get("user").id, modelImages(files));
+	const result = await bridgeFor(project).prompt(promptWithAttachments(message, paths), c.get("user").id, modelImages(files), { mode, model });
 	return c.json({ ...(result as object), attachments: paths });
 });
 
@@ -601,6 +609,10 @@ api.post("/projects/:id/github/push", async (c) => {
 api.get("/settings", requireAdmin, async (c) =>
 	c.json({ sso: await ssoView(), github: await gitHubView(), githubNewApps: await newAppsDefaults(), publicUrl: config.publicUrl }),
 );
+
+api.get("/settings/models", requireAdmin, async (c) => c.json(await modelSettings()));
+
+api.put("/settings/models", requireAdmin, async (c) => c.json(await saveModelSettings(await c.req.json())));
 
 api.put("/settings/github/new-apps", requireAdmin, async (c) => c.json(await saveNewAppsDefaults(await c.req.json())));
 

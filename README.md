@@ -44,6 +44,7 @@ Everything runs on one machine you control: a single AWS instance with Docker, s
 - **Keep iterating like a conversation.** Ask for a filter, a new column, an export button. Every agent turn is a version you can restore, and you can attach screenshots, mockups or CSV files to a message.
 - **Open the hood when you want to.** Edit the code in the browser, browse and edit the app's tables, run SQL, or push the whole history to your GitHub organization.
 - **Share it with exactly the right people.** Apps sit behind the team's sign-in (SSO if you want it), and each app's owner decides who can view and who can edit.
+- **Plan first, or just talk it through.** Pick Auto to build right away, Plan to get a plan you approve before any code changes, or Chat to discuss without touching files, and choose which Claude model answers.
 - **Teach the agent how your company builds.** Add skills for your design system, your data model or your house rules, for yourself or for the whole organization.
 - **Keep AI spend in check.** Every message is priced and charged to whoever sent it, against a monthly budget an admin sets per person.
 
@@ -83,6 +84,16 @@ Everything runs on one machine you control: a single AWS instance with Docker, s
     </td>
   </tr>
   <tr>
+    <td width="50%" valign="top">
+      <img src="docs/assets/screenshots/plan.png" alt="Plan mode: the agent proposes a plan for the deals dashboard with a Build this plan button, and the composer shows Auto, Plan, Chat and the model picker" width="100%"><br>
+      <sub><strong>Plan before it builds.</strong> Auto, Plan and Chat modes, and a model picker in the composer.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/assets/screenshots/models.png" alt="Settings, Models: Claude models with their prices, the allowed ones ticked and Opus 5.5 as the default" width="100%"><br>
+      <sub><strong>Choose the models.</strong> Admins pick which Claude models members may use and the default.</sub>
+    </td>
+  </tr>
+  <tr>
     <td colspan="2" valign="top">
       <img src="docs/assets/screenshots/mobile.png" alt="Agency on a phone: the home screen, the chat, and the app preview" width="100%"><br>
       <sub><strong>Works on a phone.</strong> Ask for a change from anywhere and check the result in the preview tab.</sub>
@@ -109,7 +120,8 @@ Everything runs on one machine you control: a single AWS instance with Docker, s
 | Attach images and files to a message | Google Drive and Sheets, Salesforce (built in, OAuth) | Versioned images with rollback | Per-app sharing: owner, editors, viewers |
 | Every turn is a restorable version | monday.com, Notion, Linear and any MCP server | Separate live database from the first publish | Monthly AI budgets per member, usage page |
 | Code tab with an in-browser editor | Read-only by default; connections can be limited to specific apps | Push to your GitHub organization, automatically for new apps | Personal and organization skills |
-| Phone layout, light and dark | Each app gets its own Postgres database, with a Data tab | Nightly backups to S3 | One AWS instance, stopped when nobody uses it |
+| Auto, Plan and Chat modes, with a model picker | Each app gets its own Postgres database, with a Data tab | Nightly backups to S3 | Allowed Claude models and the organization default |
+| Phone layout, light and dark | | | One AWS instance, stopped when nobody uses it |
 
 What's next is in the [roadmap](PLAN.md): per-person connector sign-in, sandbox hardening (gVisor or Firecracker, egress allowlist, idle shutdown), and more than one host when one is not enough.
 
@@ -157,8 +169,9 @@ open http://localtest.me
 ### First steps after signing in
 
 1. **Settings > Connections**: add your first data source, for example a read-only Postgres role on your CRM ([guide](docs/connections.md)).
-2. **Settings > Team**: add members and their monthly budgets, or connect **Single sign-on** ([admin guide](docs/admin.md)).
-3. **Apps**: describe what you want to build.
+2. **Settings > Models**: choose which Claude models members may use and the default.
+3. **Settings > Team**: add members and their monthly budgets, or connect **Single sign-on** ([admin guide](docs/admin.md)).
+4. **Apps**: describe what you want to build.
 
 ---
 
@@ -224,7 +237,7 @@ PLAN.md          roadmap
 | [Deploy](docs/deploy.md) | Both AWS setups, moving between them, commands, backups and restore, costs, running locally |
 | [Connections](docs/connections.md) | Every data source type, OAuth sign-in, read-only and per-app access |
 | [Skills](docs/skills.md) | Personal and organization skills, importing from GitHub, how pi loads them |
-| [Admin guide](docs/admin.md) | Settings, sharing apps, budgets, single sign-on, GitHub |
+| [Admin guide](docs/admin.md) | Settings, models and chat modes, sharing apps, budgets, single sign-on, GitHub |
 | [Security](docs/security.md) | What to know before you put it in front of your team |
 | [Brand](docs/brand/README.md) | Axel the axolotl, and where the logo is used |
 

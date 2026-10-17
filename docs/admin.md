@@ -6,7 +6,11 @@ What admins set up, and how members share the apps they build.
 
 ## Settings
 
-Everything that isn't an app lives under **Settings**, grouped like most workspace tools: **Account** (My skills, Usage) and **Organization** (Connections, Skills, and for admins Team, Single sign-on, GitHub). On a phone, Settings opens as a list of sections. Old links such as `#/connections` still work.
+Everything that isn't an app lives under **Settings**, grouped like most workspace tools: **Account** (My skills, Usage) and **Organization** (Connections, Skills, and for admins Team, Models, Single sign-on, GitHub). On a phone, Settings opens as a list of sections. Old links such as `#/connections` still work.
+
+## Models and chat modes
+
+Under **Settings > Organization > Models** an admin sees every Claude model the deploy's provider offers (Claude API or Bedrock), ticks the ones members may use and picks the organization default. Until then only the model the deploy was set up with is allowed. In the builder chat, members pick one of the allowed models and a mode: **Auto** builds right away (the default), **Plan** proposes a plan and waits for "Build this plan", **Chat** answers and discusses without changing files. Plan and Chat give the agent read-only tools (plus the organization data tools). Each message is charged to the member's budget at the price of the model that answered.
 
 ## Sharing apps
 

@@ -224,6 +224,8 @@ const ICONS = {
 	wand: '<path d="m15 4 5 5"/><path d="M3 21 15.5 8.5"/><path d="M8 2v3"/><path d="M6.5 3.5h3"/><path d="M20 14v3"/><path d="M18.5 15.5h3"/><path d="M11 3l.5 1"/>',
 	paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
 	upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+	cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/>',
+	chevronDown: '<path d="m6 9 6 6 6-6"/>',
 	infinity: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4z"/>',
 };
 
@@ -596,6 +598,71 @@ function pastedName(file) {
 	return `Pasted ${stamp}.${ext}`;
 }
 
+// How the agent answers: Auto builds, Plan proposes a plan to approve first, Chat only talks.
+const CHAT_MODES = [
+	{ key: "auto", label: "Auto", title: "Builds and changes the app right away", placeholder: "Ask for a change..." },
+	{ key: "plan", label: "Plan", title: "Proposes a plan and waits for your approval before building", placeholder: "Describe what to plan..." },
+	{ key: "chat", label: "Chat", title: "Answers questions and discusses ideas without changing the app", placeholder: "Ask about the app..." },
+];
+
+/** "Claude Opus 4.8" reads as "Opus 4.8" in the narrow chat composer. */
+function shortModelName(name) {
+	return name.replace(/^Claude /, "");
+}
+
+function readStored(key) {
+	try {
+		return localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+}
+
+function writeStored(key, value) {
+	try {
+		localStorage.setItem(key, value);
+	} catch {}
+}
+
+/** The models an admin allowed, and this member's pick among them (remembered in this browser). */
+function useModelChoice() {
+	const [models, setModels] = useState(null);
+	const [model, setModelState] = useState(() => readStored("agency.model"));
+	useEffect(() => {
+		api("/models").then(setModels, () => setModels({ models: [], default: null }));
+	}, []);
+	const allowed = models?.models ?? [];
+	const current = allowed.some((m) => m.key === model) ? model : models?.default;
+	const setModel = (key) => {
+		setModelState(key);
+		writeStored("agency.model", key);
+	};
+	return { models: allowed, model: current, setModel };
+}
+
+function ComposerOptions({ mode, onMode, models, model, onModel }) {
+	const index = CHAT_MODES.findIndex((m) => m.key === mode);
+	const selected = models.find((m) => m.key === model);
+	return html`<div class="composer-opts">
+		<div class="seg mode-seg" role="tablist" aria-label="Chat mode" style=${`--count:${CHAT_MODES.length};--index:${index}`}>
+			${CHAT_MODES.map(
+				(m) => html`<button role="tab" aria-selected=${m.key === mode} title=${m.title} onClick=${() => onMode(m.key)}>${m.label}</button>`,
+			)}
+		</div>
+		${selected &&
+		(models.length > 1
+			? html`<label class="model-pick" title="Model">
+					${icon("cpu")}
+					<span>${shortModelName(selected.name)}</span>
+					${icon("chevronDown", "caret")}
+					<select aria-label="Model" value=${model} onChange=${(e) => onModel(e.target.value)}>
+						${models.map((m) => html`<option value=${m.key}>${m.name}</option>`)}
+					</select>
+				</label>`
+			: html`<span class="model-pick static" title="Model chosen by your admin">${icon("cpu")}<span>${shortModelName(selected.name)}</span></span>`)}
+	</div>`;
+}
+
 function Builder({ id }) {
 	const [project, setProject] = useState(null);
 	const [items, setItems] = useState([]);
@@ -604,6 +671,8 @@ function Builder({ id }) {
 	const [attachments, setAttachments] = useState([]);
 	const [sending, setSending] = useState(false);
 	const [dragging, setDragging] = useState(false);
+	const [mode, setMode] = useState("auto");
+	const { models, model, setModel } = useModelChoice();
 	const picker = useRef(null);
 	const [error, setError] = useState("");
 	const [panel, setPanel] = useState(null);
@@ -691,33 +760,45 @@ function Builder({ id }) {
 			}),
 		);
 
-	const send = async () => {
-		const message = input.trim();
-		const files = attachments;
+	const send = async (override) => {
+		const message = override?.message ?? input.trim();
+		const files = override ? [] : attachments;
+		const sendMode = override?.mode ?? mode;
 		if ((!message && files.length === 0) || sending) return;
-		setInput("");
-		setAttachments([]);
+		if (!override) {
+			setInput("");
+			setAttachments([]);
+		}
 		setError("");
 		try {
 			if (files.length) {
 				setSending(true);
 				const form = new FormData();
 				form.append("message", message);
+				form.append("mode", sendMode);
+				if (model) form.append("model", model);
 				for (const a of files) form.append("files", a.file, a.file.name || "pasted file");
 				const response = await fetch(`/api/projects/${id}/prompt`, { method: "POST", body: form });
 				const data = await response.json().catch(() => ({}));
 				if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
 				for (const a of files) if (a.url) URL.revokeObjectURL(a.url);
 			} else {
-				await api(`/projects/${id}/prompt`, { method: "POST", body: { message } });
+				await api(`/projects/${id}/prompt`, { method: "POST", body: { message, mode: sendMode, model } });
 			}
 		} catch (err) {
 			setError(err.message);
-			setInput(message);
-			setAttachments(files);
+			if (!override) {
+				setInput(message);
+				setAttachments(files);
+			}
 		} finally {
 			setSending(false);
 		}
+	};
+	// Approving a plan switches to Auto, which builds it.
+	const buildPlan = () => {
+		setMode("auto");
+		send({ message: "The plan looks good. Build it.", mode: "auto" });
 	};
 	const dragHasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes("Files");
 
@@ -733,6 +814,7 @@ function Builder({ id }) {
 			${icon(iconName)} <span>${label}</span>${name === "preview" && fresh && phone && tab !== "preview" && html`<span class="dot accent-dot" title="Updated"></span>`}
 		</button>`;
 	const openFromMenu = (name) => setPanel(name);
+	const options = html`<${ComposerOptions} mode=${mode} onMode=${setMode} models=${models} model=${model} onModel=${setModel} />`;
 	return html`<div class="builder">
 		<header class="topbar">
 			<div class="left">
@@ -795,6 +877,15 @@ function Builder({ id }) {
 						<div>Describe what to build or change.<br />The agent edits the code and the preview updates.</div>
 					</div>`}
 					${items.map((item) => html`<${ChatItem} item=${item} />`)}
+					${canEdit &&
+					mode === "plan" &&
+					!running &&
+					items.at(-1)?.kind === "assistant" &&
+					items.at(-1).text &&
+					html`<div class="plan-approve">
+						<button class="btn primary sm" disabled=${sending} onClick=${buildPlan}>${icon("play")} Build this plan</button>
+						<span class="faint">or reply to change it</span>
+					</div>`}
 				</div>
 				${canEdit
 					? html`<div class="chat-input">
@@ -809,8 +900,9 @@ function Builder({ id }) {
 								</div>`,
 							)}
 						</div>`}
+						${phone && options}
 						<textarea
-							placeholder=${running ? "Add an instruction for after this step..." : "Ask for a change..."}
+							placeholder=${running ? "Add an instruction for after this step..." : CHAT_MODES.find((m) => m.key === mode).placeholder}
 							enterkeyhint="send"
 							value=${input}
 							onInput=${(e) => setInput(e.target.value)}
@@ -839,10 +931,11 @@ function Builder({ id }) {
 								}}
 							/>
 							<button class="icon-btn attach-btn" title="Attach files or images" onClick=${() => picker.current?.click()}>${icon("paperclip")}</button>
-							<span class="faint grow hint">Shift + Enter for a new line</span>
+							${phone ? null : options}
+							<span class="grow"></span>
 							${running &&
 							html`<button class="btn sm" onClick=${() => api(`/projects/${id}/abort`, { method: "POST" })}>${icon("stop")} Stop</button>`}
-							<button class="btn primary send" title="Send" disabled=${(!input.trim() && attachments.length === 0) || sending} onClick=${send}>
+							<button class="btn primary send" title="Send" disabled=${(!input.trim() && attachments.length === 0) || sending} onClick=${() => send()}>
 								${sending ? html`<span class="spinner"></span>` : icon("arrowUp")}
 							</button>
 						</div>
@@ -3045,6 +3138,70 @@ function OrgSettings({ part }) {
 	</div>`;
 }
 
+function price([input, output]) {
+	return `$${input} in / $${output} out`;
+}
+
+/** Admin: which Claude models members may pick in the chat, and the organization default. */
+function ModelSettings() {
+	const [data, setData] = useState(null);
+	const [error, setError] = useState("");
+	useEffect(() => {
+		api("/settings/models").then(setData, (err) => setError(err.message));
+	}, []);
+	const save = async (allowed, fallback) => {
+		const before = data;
+		setData({ ...data, allowed, default: fallback });
+		try {
+			setData(await api("/settings/models", { method: "PUT", body: { allowed, default: fallback } }));
+			toast("Models saved");
+		} catch (err) {
+			setData(before);
+			toast(err.message, "error");
+		}
+	};
+	const toggle = (key, on) => {
+		const allowed = on ? [...data.allowed, key] : data.allowed.filter((k) => k !== key);
+		// Turning off the default hands it to the first model still allowed.
+		save(allowed, allowed.includes(data.default) ? data.default : allowed[0]);
+	};
+	const source = data?.provider === "bedrock" ? "Amazon Bedrock" : "the Claude API";
+	return html`<div class="page">
+		<header class="page-head">
+			<h1>Models</h1>
+			<p>Which Claude models members can pick when they chat with the agent. Each message is charged to the member's budget at the price of the model that answered.</p>
+		</header>
+		${error && html`<p class="error">${error}</p>`}
+		${data === null
+			? !error && html`<div class="empty"><span class="spinner"></span></div>`
+			: html`<div class="card">
+					<div class="card-head row">
+						<h2 class="grow">Available models</h2>
+						<span class="muted" style="font-size:13px">${data.allowed.length} of ${data.models.length} allowed · via ${source}</span>
+					</div>
+					${data.models.map((m) => {
+						const allowed = data.allowed.includes(m.key);
+						const isDefault = data.default === m.key;
+						return html`<div class=${`list-row model-row${allowed ? "" : " off"}`} key=${m.key}>
+							<label class="check model-check">
+								<input
+									type="checkbox"
+									checked=${allowed}
+									disabled=${allowed && data.allowed.length === 1}
+									onChange=${(e) => toggle(m.key, e.target.checked)}
+								/>
+								<div class="grow">
+									<div class="title">${m.name} ${isDefault && html`<span class="badge accent">Default</span>`}</div>
+									<div class="sub">${m.note}${m.price && html` · <span class="mono">${price(m.price)}</span> per million tokens`}</div>
+								</div>
+							</label>
+							${allowed && !isDefault && html`<button class="btn sm" onClick=${() => save(data.allowed, m.key)}>Make default</button>`}
+						</div>`;
+					})}
+				</div>`}
+	</div>`;
+}
+
 // Settings sections, grouped the usual way: what is yours, then what the whole organization shares.
 const SETTINGS_GROUPS = [
 	{
@@ -3060,6 +3217,7 @@ const SETTINGS_GROUPS = [
 			{ key: "connections", label: "Connections", icon: "database" },
 			{ key: "org-skills", label: "Skills", icon: "sparkles" },
 			{ key: "team", label: "Team", icon: "users", admin: true },
+			{ key: "models", label: "Models", icon: "cpu", admin: true },
 			{ key: "sso", label: "Single sign-on", icon: "lock", admin: true },
 			{ key: "github", label: "GitHub", icon: "github", admin: true },
 		],
@@ -3078,6 +3236,7 @@ function Settings({ user, section, onUsageChange }) {
 		usage: () => html`<${UsagePage} />`,
 		connections: () => html`<${Connections} user=${user} />`,
 		team: () => html`<${Team} user=${user} onChange=${onUsageChange} />`,
+		models: () => html`<${ModelSettings} />`,
 		sso: () => html`<${OrgSettings} key="sso" part="sso" />`,
 		github: () => html`<${OrgSettings} key="github" part="github" />`,
 	}[current];

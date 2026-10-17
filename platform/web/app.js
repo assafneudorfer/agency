@@ -197,6 +197,8 @@ const ICONS = {
 	settings: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
 	more: '<circle cx="5" cy="12" r="1.25"/><circle cx="12" cy="12" r="1.25"/><circle cx="19" cy="12" r="1.25"/>',
 	message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+	wand: '<path d="m15 4 5 5"/><path d="M3 21 15.5 8.5"/><path d="M8 2v3"/><path d="M6.5 3.5h3"/><path d="M20 14v3"/><path d="M18.5 15.5h3"/><path d="M11 3l.5 1"/>',
+	upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
 	infinity: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4z"/>',
 };
 
@@ -1443,7 +1445,7 @@ function GitHubPanel({ project, running, open }) {
 	if (!info) return html`<div class="sheet-body">${error ? html`<p class="error">${error}</p>` : html`<div class="empty"><span class="spinner"></span></div>`}</div>`;
 	if (!info.configured) {
 		return html`<div class="sheet-body">
-			<div class="callout">Push this app's code to your organization's GitHub. An admin connects GitHub once under <a href="#/settings">Settings</a>.</div>
+			<div class="callout">Push this app's code to your organization's GitHub. An admin connects GitHub once under <a href="#/settings/github">Settings</a>.</div>
 		</div>`;
 	}
 	if (!info.repo) {
@@ -1862,7 +1864,7 @@ function Connections({ user }) {
 		const params = new URLSearchParams(location.hash.split("?")[1] ?? "");
 		if (params.get("connected")) toast(`Connected ${params.get("connected")}`);
 		if (params.get("oauth_error")) toast(`Sign-in failed: ${params.get("oauth_error")}`, "error");
-		if (params.size) history.replaceState(null, "", "#/connections");
+		if (params.size) history.replaceState(null, "", "#/settings/connections");
 	}, []);
 	const spec = CONNECTION_TYPES[type];
 	const set = (key) => (e) => setForm({ ...form, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
@@ -2071,6 +2073,326 @@ function Connections({ user }) {
 				</div>
 			</form>`}
 		</div>
+	</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Skills: the member's own instructions for the coding agent
+
+const SKILL_EXAMPLES = [
+	["frontend-design", "https://github.com/anthropics/skills/tree/main/skills/frontend-design"],
+	["webapp-testing", "https://github.com/anthropics/skills/tree/main/skills/webapp-testing"],
+	["brand-guidelines", "https://github.com/anthropics/skills/tree/main/skills/brand-guidelines"],
+];
+
+function skillSource(source) {
+	if (source.startsWith("https://github.com/")) {
+		// owner/repo and the skill's folder; the branch in between can itself contain slashes.
+		const [owner, repo, , ...rest] = source.replace("https://github.com/", "").split("/");
+		const folder = rest.length > 1 ? ` · ${rest[rest.length - 1]}` : "";
+		return html`<a href=${source} target="_blank" rel="noopener">${icon("github")} ${owner}/${repo}${folder}</a>`;
+	}
+	if (source.startsWith("upload:")) return html`${icon("upload")} ${source.slice(7)}`;
+	return html`${icon("pencil")} Written here`;
+}
+
+function savedMessage(result) {
+	const names = result.saved.map((s) => s.name);
+	const verb = result.saved.every((s) => s.status === "updated") ? "Updated" : "Added";
+	const text = names.length <= 3 ? names.join(", ") : `${names.length} skills`;
+	return `${verb} ${text}${result.skipped.length ? `; skipped ${result.skipped.length}` : ""}`;
+}
+
+function SkillEditor({ base, id, readOnly, onSaved, onClose }) {
+	const [skill, setSkill] = useState(null);
+	const [content, setContent] = useState("");
+	const [error, setError] = useState("");
+	const [busy, setBusy] = useState(false);
+	useEffect(() => {
+		api(`${base}/${id}`).then(
+			(data) => {
+				setSkill(data);
+				setContent(data.content);
+			},
+			(err) => setError(err.message),
+		);
+	}, [id]);
+	if (!skill) return html`<div class="sheet-body">${error ? html`<p class="error">${error}</p>` : html`<div class="empty"><span class="spinner"></span></div>`}</div>`;
+	const save = async () => {
+		setBusy(true);
+		setError("");
+		try {
+			await api(`${base}/${id}`, { method: "PUT", body: { content } });
+			toast("Saved. Your next message to the agent uses it.");
+			onSaved();
+			onClose();
+		} catch (err) {
+			setError(err.message);
+		}
+		setBusy(false);
+	};
+	const others = skill.files.filter((f) => f.path !== "SKILL.md");
+	return html`<div class="sheet-body">
+		<label class="field">
+			<span>SKILL.md</span>
+			<textarea class="textarea mono skill-md" rows="16" spellcheck="false" readOnly=${readOnly} value=${content} onInput=${(e) => setContent(e.target.value)}></textarea>
+		</label>
+		${others.length > 0 &&
+		html`<div class="field">
+			<span>Other files <span class="hint">${others.length}</span></span>
+			<ul class="skill-files">
+				${others.map((f) => html`<li>${icon("file")} <span class="mono grow">${f.path}</span> <span class="faint">${bytes(f.size)}</span></li>`)}
+			</ul>
+		</div>`}
+		${error && html`<p class="error">${error}</p>`}
+		${!readOnly &&
+		html`<button class="btn primary" disabled=${busy || content === skill.content} onClick=${save}>
+			${busy ? html`<span class="spinner"></span>` : icon("check")} Save
+		</button>`}
+	</div>`;
+}
+
+function bytes(size) {
+	if (size < 1024) return `${size} B`;
+	if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+	return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const SKILL_TABS = ["github", "upload", "write"];
+
+/**
+ * A list of skills with ways to add more. scope "me" is the member's own; "org" is the organization's,
+ * which every build loads and only admins change.
+ */
+function Skills({ scope, user }) {
+	const org = scope === "org";
+	const base = org ? "/org-skills" : "/skills";
+	const canEdit = !org || user.role === "admin";
+	const [orgNames, setOrgNames] = useState([]);
+	const [skills, setSkills] = useState(null);
+	const [template, setTemplate] = useState("");
+	const [tab, setTab] = useState("github");
+	const [url, setUrl] = useState("");
+	const [content, setContent] = useState("");
+	const [error, setError] = useState("");
+	const [busy, setBusy] = useState("");
+	const [editing, setEditing] = useState(null);
+	const [dragging, setDragging] = useState(false);
+	const fileInput = useRef(null);
+	const load = () =>
+		api(base).then(
+			(data) => {
+				setSkills(data.skills);
+				setTemplate(data.template);
+				setContent((current) => current || data.template);
+			},
+			(err) => setError(err.message),
+		);
+	useEffect(() => {
+		load();
+		if (!org) api("/org-skills").then((data) => setOrgNames(data.skills.filter((s) => s.enabled).map((s) => s.name)), () => {});
+	}, []);
+	const run = async (what, action) => {
+		setBusy(what);
+		setError("");
+		try {
+			await action();
+		} catch (err) {
+			setError(err.message);
+		}
+		setBusy("");
+	};
+	const importGitHub = (e, link = url) => {
+		e?.preventDefault();
+		return run("github", async () => {
+			const result = await api(`${base}/github`, { method: "POST", body: { url: link.trim() } });
+			toast(savedMessage(result));
+			setUrl("");
+			await load();
+		});
+	};
+	const upload = (file) =>
+		file &&
+		run("upload", async () => {
+			const response = await fetch(`/api${base}/upload?filename=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.error ?? `Upload failed (${response.status})`);
+			toast(savedMessage(data));
+			await load();
+		});
+	const write = (e) => {
+		e.preventDefault();
+		return run("write", async () => {
+			const skill = await api(base, { method: "POST", body: { content } });
+			toast(`Added ${skill.name}`);
+			setContent(template);
+			await load();
+		});
+	};
+	const toggle = async (skill) => {
+		setSkills(skills.map((s) => (s.id === skill.id ? { ...s, enabled: !s.enabled } : s)));
+		await api(`${base}/${skill.id}`, { method: "PUT", body: { enabled: !skill.enabled } }).catch((err) => toast(err.message, "error"));
+		load();
+	};
+	const refresh = (skill) =>
+		api(`${base}/${skill.id}/refresh`, { method: "POST" }).then(
+			(result) => {
+				toast(savedMessage(result));
+				load();
+			},
+			(err) => toast(err.message, "error"),
+		);
+	const remove = async (skill) => {
+		const who = org ? "Builds stop" : "The agent stops";
+		if (!confirm(`Remove ${skill.name}? ${who} using it from the next message.`)) return;
+		await api(`${base}/${skill.id}`, { method: "DELETE" });
+		load();
+	};
+	const enabled = (skills ?? []).filter((s) => s.enabled).length;
+	return html`<div class="page">
+		<header class="page-head">
+			<h1>${org ? "Organization skills" : "My skills"}</h1>
+			${org
+				? html`<p>
+						${`Skills every member's builds use: your design system, approved libraries, how to reach your data. ${canEdit ? "Only admins change them." : "Your admin manages them."} A member's own skill with the same name takes its place.`}
+					</p>`
+				: html`<p>
+						Teach the agent how you like things built: a library you use, a checklist, your style. Every app you build uses the ones that are
+						on. Type <span class="mono">/skill:name</span> in a chat to use one on purpose.
+					</p>`}
+		</header>
+		<div class="stack">
+			${!org &&
+			orgNames.length > 0 &&
+			html`<a class="callout skill-org-note" href="#/settings/org-skills">
+				${icon("users")} <span class="grow">Your builds also use ${orgNames.length} organization ${orgNames.length === 1 ? "skill" : "skills"}.</span>
+				${icon("chevron")}
+			</a>`}
+			<div class="card">
+				${skills === null
+					? html`<div class="empty"><span class="spinner"></span></div>`
+					: skills.length === 0
+						? html`<div class="empty">${icon("wand")} ${canEdit ? "No skills yet. Add one below." : "No organization skills yet."}</div>`
+						: html`<div class="card-head row">
+									<h2 class="grow">${org ? "For everyone" : "Your skills"}</h2>
+									<span class="faint">${enabled} of ${skills.length} on</span>
+								</div>
+								${skills.map(
+									(skill) => html`<div class=${`list-row skill-row${skill.enabled ? "" : " off"}`}>
+										<label class="switch" title=${skill.enabled ? "On: the agent can use it" : "Off"}>
+											<input
+												type="checkbox"
+												checked=${skill.enabled}
+												disabled=${!canEdit}
+												onChange=${() => toggle(skill)}
+												aria-label=${`Use ${skill.name}`}
+											/>
+											<span></span>
+										</label>
+										<div class="grow">
+											<div class="title">
+												<span class="mono">${skill.name}</span>
+												${!org && orgNames.includes(skill.name) && html`<span class="badge" title="Your builds use this one instead of the organization's">Replaces organization skill</span>`}
+											</div>
+											<div class="sub clamp">${skill.description}</div>
+											<div class="sub skill-meta">
+												${skillSource(skill.source)}
+												<span>${skill.fileCount} ${skill.fileCount === 1 ? "file" : "files"}</span>
+												<span>Updated ${timeAgo(skill.updatedAt)}</span>
+											</div>
+										</div>
+										<div class="row-actions">
+											${canEdit &&
+											skill.source.startsWith("https://github.com/") &&
+											html`<button class="btn sm" title="Import again from GitHub" onClick=${() => refresh(skill)}>${icon("refresh")} Update</button>`}
+											<button class="btn sm" onClick=${() => setEditing(skill)}>${canEdit ? "Edit" : "View"}</button>
+											${canEdit && html`<button class="btn sm danger" title="Remove" onClick=${() => remove(skill)}>${icon("trash")}</button>`}
+										</div>
+									</div>`,
+								)}`}
+			</div>
+			${canEdit &&
+			html`<div class="card">
+				<div class="card-head">
+					<h2>Add a skill</h2>
+					<p>Any skill in the Agent Skills format works: a folder with a SKILL.md, plus scripts or references if it has them.</p>
+				</div>
+				<div class="card-body stack-sm">
+					<div class="seg skill-tabs" role="tablist" style=${`--index:${SKILL_TABS.indexOf(tab)};--count:3`}>
+						<button role="tab" aria-selected=${tab === "github"} onClick=${() => setTab("github")}>${icon("github")} From GitHub</button>
+						<button role="tab" aria-selected=${tab === "upload"} onClick=${() => setTab("upload")}>${icon("upload")} Upload</button>
+						<button role="tab" aria-selected=${tab === "write"} onClick=${() => setTab("write")}>${icon("pencil")} Write</button>
+					</div>
+					${tab === "github" &&
+					html`<form class="stack-sm" onSubmit=${importGitHub}>
+						<label class="field">
+							<span>Link <span class="hint">a repository, a folder, or a SKILL.md</span></span>
+							<div class="row">
+								<input
+									class="input mono grow"
+									placeholder="https://github.com/owner/repo/tree/main/skills/my-skill"
+									value=${url}
+									onInput=${(e) => setUrl(e.target.value)}
+									required
+								/>
+								<button class="btn primary" disabled=${busy === "github" || !url.trim()}>
+									${busy === "github" ? html`<span class="spinner"></span>` : icon("plus")} Import
+								</button>
+							</div>
+						</label>
+						<div class="chips">
+							<span class="faint">Try:</span>
+							${SKILL_EXAMPLES.map(
+								([name, link]) => html`<button type="button" class="chip" disabled=${Boolean(busy)} onClick=${() => importGitHub(null, link)}>${name}</button>`,
+							)}
+						</div>
+						<p class="faint small">A link to a repository or folder with several skills imports all of them. Importing a skill you already have updates it.</p>
+					</form>`}
+					${tab === "upload" &&
+					html`<div
+						class=${`dropzone${dragging ? " over" : ""}`}
+						onDragOver=${(e) => {
+							e.preventDefault();
+							setDragging(true);
+						}}
+						onDragLeave=${() => setDragging(false)}
+						onDrop=${(e) => {
+							e.preventDefault();
+							setDragging(false);
+							upload(e.dataTransfer.files[0]);
+						}}
+						onClick=${() => fileInput.current.click()}
+					>
+						${busy === "upload" ? html`<span class="spinner"></span>` : icon("upload")}
+						<b>Drop a SKILL.md or a .zip of a skill folder</b>
+						<span class="faint">or click to choose a file (.md, .zip, .skill)</span>
+						<input
+							ref=${fileInput}
+							type="file"
+							accept=".md,.markdown,.zip,.skill"
+							hidden
+							onChange=${(e) => {
+								upload(e.target.files[0]);
+								e.target.value = "";
+							}}
+						/>
+					</div>`}
+					${tab === "write" &&
+					html`<form class="stack-sm" onSubmit=${write}>
+						<label class="field">
+							<span>SKILL.md <span class="hint">name and description go in the header</span></span>
+							<textarea class="textarea mono skill-md" rows="12" spellcheck="false" value=${content} onInput=${(e) => setContent(e.target.value)}></textarea>
+						</label>
+						<div><button class="btn primary" disabled=${busy === "write" || content === template}>${busy === "write" ? html`<span class="spinner"></span>` : icon("plus")} Add skill</button></div>
+					</form>`}
+					${error && html`<p class="error">${error}</p>`}
+				</div>
+			</div>`}
+		</div>
+		<${Sheet} open=${Boolean(editing)} title=${editing?.name ?? ""} onClose=${() => setEditing(null)}>
+			${editing &&
+			html`<${SkillEditor} key=${editing.id} base=${base} id=${editing.id} readOnly=${!canEdit} onSaved=${load} onClose=${() => setEditing(null)} />`}
+		</${Sheet}>
 	</div>`;
 }
 
@@ -2562,7 +2884,8 @@ function GitHubSettings({ github, newApps, onSaved }) {
 	</form>`;
 }
 
-function Settings() {
+/** Single sign-on or GitHub: organization settings stored on the server, for admins. */
+function OrgSettings({ part }) {
 	const [data, setData] = useState(null);
 	const [error, setError] = useState("");
 	const load = () => api("/settings").then(setData, (err) => setError(err.message));
@@ -2572,20 +2895,82 @@ function Settings() {
 		const params = new URLSearchParams(location.hash.split("?")[1] ?? "");
 		if (params.get("github") === "connected") toast("GitHub connected");
 		if (params.get("github_error")) toast(`GitHub: ${params.get("github_error")}`, "error");
-		if (params.size) history.replaceState(null, "", "#/settings");
+		if (params.size) history.replaceState(null, "", "#/settings/github");
 	}, []);
+	const head =
+		part === "sso"
+			? html`<h1>Single sign-on</h1>
+					<p>How members of your organization sign in.</p>`
+			: html`<h1>GitHub</h1>
+					<p>Where apps keep their code.</p>`;
 	return html`<div class="page">
-		<header class="page-head">
-			<h1>Settings</h1>
-			<p>How your organization signs in, and where apps keep their code.</p>
-		</header>
+		<header class="page-head">${head}</header>
 		${error && html`<p class="error">${error}</p>`}
 		${data === null
 			? html`<div class="empty"><span class="spinner"></span></div>`
-			: html`<div class="stack">
-					<${SsoSettings} sso=${data.sso} publicUrl=${data.publicUrl} onSaved=${load} />
-					<${GitHubSettings} github=${data.github} newApps=${data.githubNewApps} onSaved=${load} />
-				</div>`}
+			: part === "sso"
+				? html`<${SsoSettings} sso=${data.sso} publicUrl=${data.publicUrl} onSaved=${load} />`
+				: html`<${GitHubSettings} github=${data.github} newApps=${data.githubNewApps} onSaved=${load} />`}
+	</div>`;
+}
+
+// Settings sections, grouped the usual way: what is yours, then what the whole organization shares.
+const SETTINGS_GROUPS = [
+	{
+		label: "Account",
+		items: [
+			{ key: "skills", label: "My skills", icon: "wand" },
+			{ key: "usage", label: "Usage", icon: "gauge" },
+		],
+	},
+	{
+		label: "Organization",
+		items: [
+			{ key: "connections", label: "Connections", icon: "database" },
+			{ key: "org-skills", label: "Skills", icon: "sparkles" },
+			{ key: "team", label: "Team", icon: "users", admin: true },
+			{ key: "sso", label: "Single sign-on", icon: "lock", admin: true },
+			{ key: "github", label: "GitHub", icon: "github", admin: true },
+		],
+	},
+];
+
+function Settings({ user, section, onUsageChange }) {
+	const phone = usePhone();
+	const groups = SETTINGS_GROUPS.map((g) => ({ ...g, items: g.items.filter((item) => !item.admin || user.role === "admin") }));
+	const keys = groups.flatMap((g) => g.items.map((item) => item.key));
+	// A phone shows the list of sections first; a wider screen opens the first section next to it.
+	const current = keys.includes(section) ? section : phone ? null : keys[0];
+	const content = {
+		skills: () => html`<${Skills} key="me" scope="me" user=${user} />`,
+		"org-skills": () => html`<${Skills} key="org" scope="org" user=${user} />`,
+		usage: () => html`<${UsagePage} />`,
+		connections: () => html`<${Connections} user=${user} />`,
+		team: () => html`<${Team} user=${user} onChange=${onUsageChange} />`,
+		sso: () => html`<${OrgSettings} key="sso" part="sso" />`,
+		github: () => html`<${OrgSettings} key="github" part="github" />`,
+	}[current];
+	const nav = html`<nav class="settings-nav" aria-label="Settings">
+		${groups.map(
+			(group) => html`<div class="settings-group">
+				<div class="settings-group-label">${group.label}</div>
+				${group.items.map(
+					(item) => html`<a href=${`#/settings/${item.key}`} class="settings-link" aria-current=${current === item.key ? "page" : undefined}>
+						${icon(item.icon)} <span class="grow">${item.label}</span> ${icon("chevron", "go")}
+					</a>`,
+				)}
+			</div>`,
+		)}
+	</nav>`;
+	if (phone && !current) {
+		return html`<div class="page settings-index">
+			<header class="page-head"><h1>Settings</h1></header>
+			${nav}
+		</div>`;
+	}
+	return html`<div class="settings">
+		${phone ? html`<a class="settings-back" href="#/settings">${icon("arrowLeft")} Settings</a>` : nav}
+		<div class="settings-body">${content?.()}</div>
 	</div>`;
 }
 
@@ -2611,10 +2996,14 @@ function App() {
 		if (!user) return null;
 		const project = /^\/p\/([0-9a-f-]+)/.exec(route);
 		if (project) return html`<${Builder} id=${project[1]} />`;
-		if (route.startsWith("/connections")) return html`<${Connections} user=${user} />`;
-		if (route.startsWith("/team")) return html`<${Team} user=${user} onChange=${refreshUsage} />`;
-		if (route.startsWith("/usage")) return html`<${UsagePage} />`;
-		if (route.startsWith("/settings") && user.role === "admin") return html`<${Settings} />`;
+		// Pages that moved under Settings keep working from old links.
+		const moved = /^\/(connections|usage|team|skills)\b/.exec(route);
+		if (moved) {
+			location.replace(`#/settings/${moved[1]}${route.slice(moved[0].length)}`);
+			return null;
+		}
+		const settings = /^\/settings(?:\/([a-z-]+))?/.exec(route);
+		if (settings) return html`<${Settings} user=${user} section=${settings[1]} onUsageChange=${refreshUsage} />`;
 		return html`<${Home} />`;
 	}, [route, user]);
 	// Spend changes as the agent works, so the sidebar meter refreshes on every navigation.
@@ -2641,7 +3030,7 @@ function App() {
 				<a class="brand" href="#/"><img src="/static/logo.png" alt="" /> <b>Agency</b></a>
 				<span class="grow"></span>
 				${usage &&
-				html`<a class="usage-pill" href="#/usage" title="Your AI usage this month">
+				html`<a class="usage-pill" href="#/settings/usage" title="Your AI usage this month">
 					${!usage.unlimited && html`<${Meter} spent=${usage.spentUsd} budget=${usage.budgetUsd} />`}
 					<span class="mono">${money(usage.spentUsd)}</span>
 				</a>`}
@@ -2650,12 +3039,10 @@ function App() {
 			</header>
 			<nav class="nav">
 				<a class="brand" href="#/"><img src="/static/logo.png" alt="" /> <b>Agency</b></a>
-				${link("#/", "Apps", "apps")} ${link("#/connections", "Connections", "database")}
-				${link("#/usage", "Usage", "gauge")} ${user.role === "admin" && link("#/team", "Team", "users")}
-				${user.role === "admin" && link("#/settings", "Settings", "settings")}
+				${link("#/", "Apps", "apps")} ${link("#/settings", "Settings", "settings")}
 				<span class="spacer"></span>
 				${usage &&
-				html`<a class="usage-chip" href="#/usage" title="Your AI usage this month">
+				html`<a class="usage-chip" href="#/settings/usage" title="Your AI usage this month">
 					<div class="row"><span class="grow">AI usage</span><span class="mono">${spendLabel(usage)}</span></div>
 					<${Meter} spent=${usage.spentUsd} budget=${usage.budgetUsd} unlimited=${usage.unlimited} />
 				</a>`}

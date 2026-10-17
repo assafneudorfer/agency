@@ -233,6 +233,16 @@ async function accessToken(cfg: GitHubConfig): Promise<string> {
 	return issued.token;
 }
 
+/**
+ * The organization's github.com token, for reading repositories when importing skills: it reaches
+ * the organization's private repositories and lifts the 60 requests an hour GitHub allows without one.
+ */
+export async function githubReadToken(): Promise<string | undefined> {
+	const cfg = await getGitHub();
+	if (!cfg || webUrl(cfg) !== "https://github.com") return undefined;
+	return accessToken(cfg).catch(() => undefined);
+}
+
 async function api(cfg: GitHubConfig): Promise<{ apiUrl: string; token: string }> {
 	return { apiUrl: cfg.apiUrl, token: await accessToken(cfg) };
 }

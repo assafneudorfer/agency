@@ -4,11 +4,32 @@ import { bedrockAgentEnv } from "./bedrock.ts";
 import { config } from "./config.ts";
 import { execIn, spawnDocker } from "./docker.ts";
 import { autoPush } from "./github.ts";
+import { resolveModel } from "./models.ts";
 import { ensureSandbox, type Project, sandboxName } from "./projects.ts";
 import { installSkills, skillsFingerprint } from "./skills.ts";
 import { recordUsage } from "./usage.ts";
 
 export type AgentEvent = { type: string; [key: string]: unknown };
+
+/**
+ * How the agent answers a chat message. Auto builds (edits files, runs commands). Chat and Plan get
+ * read-only tools (plus the organization data tools) and an extra instruction; Plan ends with a plan
+ * for the member to approve before anything is built.
+ */
+export const CHAT_MODES = ["auto", "plan", "chat"] as const;
+export type ChatMode = (typeof CHAT_MODES)[number];
+
+const READ_ONLY_TOOLS = "read,grep,find,ls";
+
+const MODE_PROMPTS: Record<ChatMode, string> = {
+	auto: "",
+	chat: `## Mode: Chat
+
+The person switched the chat to Chat mode: they want to talk about the app, not change it. Answer questions and discuss ideas about the app, its code and its data. You can read files and look at the organization's data, but in this mode you cannot edit files or run commands. If they ask for a change, say briefly how you would do it and that they can switch to Plan or Auto to have it built.`,
+	plan: `## Mode: Plan
+
+The person switched the chat to Plan mode: they want to agree on a plan before anything is built. Do not change anything yet; in this mode you can only read files and look at the organization's data. Look at what you need, then reply with a short plan in plain language: what the app will do and look like, the main steps, which data sources it uses, and any questions you need answered. End by asking them to approve the plan or say what to change. When they approve, they switch to Auto and you build it.`,
+};
 type Listener = (event: AgentEvent) => void;
 
 interface Pending {
@@ -37,6 +58,11 @@ export class AgentBridge {
 	private skillsOf: string;
 	// Fingerprint of the skills the running pi was started with.
 	private loadedSkills = "";
+	// Mode and model for the next start, and what the running pi has.
+	private mode: ChatMode = "auto";
+	private model: string | undefined;
+	private loadedMode: ChatMode = "auto";
+	private loadedModel = "";
 
 	constructor(project: Project) {
 		this.project = project;
@@ -88,7 +114,10 @@ export class AgentBridge {
 			"/opt/agency/system-prompt.md",
 		];
 		for (const dir of skills.dirs) piArgs.push("--skill", dir);
-		if (config.model) piArgs.push("--model", config.model);
+		this.loadedMode = this.mode;
+		if (this.mode !== "auto") piArgs.push("--append-system-prompt", MODE_PROMPTS[this.mode], "--tools", READ_ONLY_TOOLS);
+		this.loadedModel = this.model ?? (await resolveModel());
+		piArgs.push("--model", this.loadedModel);
 		const child = spawnDocker(["exec", "-i", ...env, "-w", "/workspace", sandboxName(this.project), ...piArgs]);
 		this.child = child;
 		child.stdout!.setEncoding("utf8");
@@ -169,13 +198,22 @@ export class AgentBridge {
 		});
 	}
 
-	async prompt(message: string, userId: string, images: ImageContent[] = []): Promise<unknown> {
+	async prompt(
+		message: string,
+		userId: string,
+		images: ImageContent[] = [],
+		options: { mode?: ChatMode; model?: string } = {},
+	): Promise<unknown> {
 		this.promptedBy = userId;
-		// pi reads skills when it starts, so an idle pi restarts (keeping its session) when the
-		// member prompting it has different skills. A follow-up while it works uses the loaded set.
+		// pi reads skills, tools and the system prompt when it starts, so an idle pi restarts (keeping
+		// its session) when the member prompting it has different skills or picked another mode. The
+		// model switches without a restart. A follow-up while it works keeps the running settings.
 		if (!this.running) {
 			this.skillsOf = userId;
-			if (this.child && (await skillsFingerprint(userId)) !== this.loadedSkills) await this.restart();
+			this.mode = options.mode ?? "auto";
+			this.model = await resolveModel(options.model);
+			if (this.child && (this.mode !== this.loadedMode || (await skillsFingerprint(userId)) !== this.loadedSkills)) await this.restart();
+			if (this.child && this.model !== this.loadedModel) await this.setModel(this.model);
 		}
 		return this.request({
 			type: "prompt",
@@ -183,6 +221,12 @@ export class AgentBridge {
 			...(images.length ? { images } : {}),
 			...(this.running ? { streamingBehavior: "followUp" } : {}),
 		});
+	}
+
+	private async setModel(model: string): Promise<void> {
+		const split = model.indexOf("/");
+		await this.request({ type: "set_model", provider: model.slice(0, split), modelId: model.slice(split + 1) });
+		this.loadedModel = model;
 	}
 
 	abort(): Promise<unknown> {

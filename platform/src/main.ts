@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { type Context, Hono } from "hono";
+import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { compress } from "hono/compress";
 import { streamSSE } from "hono/streaming";
 import { type AgentEvent, bridgeFor, dropBridge } from "./agent.ts";
@@ -79,6 +79,7 @@ import {
 	importFromGitHub,
 	importUpload,
 	listSkills,
+	type Owner,
 	refreshSkill,
 	SKILL_TEMPLATE,
 	SkillError,
@@ -136,7 +137,7 @@ app.route("/mcp", mcpApp);
 
 // Providers send the admin back here after they approve a connection's access.
 app.get("/oauth/callback", async (c) => {
-	const back = (params: Record<string, string>) => c.redirect(`/#/connections?${new URLSearchParams(params)}`, 302);
+	const back = (params: Record<string, string>) => c.redirect(`/#/settings/connections?${new URLSearchParams(params)}`, 302);
 	const user = await currentUser(c);
 	if (!user || user.role !== "admin") return back({ oauth_error: "Sign in as an admin, then click Connect again." });
 	const error = c.req.query("error_description") ?? c.req.query("error");
@@ -150,7 +151,7 @@ app.get("/oauth/callback", async (c) => {
 });
 
 // One-click GitHub: create the app from a manifest on GitHub, then install it on the organization.
-const settingsBack = (c: Context<AppEnv>, params: Record<string, string>) => c.redirect(`/#/settings?${new URLSearchParams(params)}`, 302);
+const settingsBack = (c: Context<AppEnv>, params: Record<string, string>) => c.redirect(`/#/settings/github?${new URLSearchParams(params)}`, 302);
 
 app.get("/github/app/start", async (c) => {
 	const user = await currentUser(c);
@@ -594,40 +595,46 @@ api.delete("/settings/github", requireAdmin, async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Skills: each member's own, loaded into the agent for every build they prompt
+// Skills: each member's own (/skills), and the organization's (/org-skills), which admins manage and
+// every build loads. A member's builds use both.
 
-api.get("/skills", async (c) => c.json({ skills: await listSkills(c.get("user").id), template: SKILL_TEMPLATE }));
+function skillRoutes(prefix: string, scopeOf: (c: Context<AppEnv>) => Owner, guard: MiddlewareHandler<AppEnv>) {
+	api.get(prefix, async (c) => c.json({ skills: await listSkills(scopeOf(c)), template: SKILL_TEMPLATE }));
 
-api.get("/skills/:id", async (c) => c.json(await getSkill(c.get("user").id, c.req.param("id"))));
+	api.get(`${prefix}/:id`, async (c) => c.json(await getSkill(scopeOf(c), c.req.param("id"))));
 
-api.post("/skills", async (c) => {
-	const body = await c.req.json<{ content?: string }>();
-	return c.json(await createSkill(c.get("user").id, String(body.content ?? "")), 201);
-});
+	api.post(prefix, guard, async (c) => {
+		const body = await c.req.json<{ content?: string }>();
+		return c.json(await createSkill(scopeOf(c), String(body.content ?? "")), 201);
+	});
 
-/** The raw file is the body; its name comes in the query string. */
-api.post("/skills/upload", async (c) => {
-	const data = Buffer.from(await c.req.arrayBuffer());
-	if (data.length === 0) return c.json({ error: "The file is empty" }, 400);
-	return c.json(await importUpload(c.get("user").id, c.req.query("filename") ?? "", data));
-});
+	/** The raw file is the body; its name comes in the query string. */
+	api.post(`${prefix}/upload`, guard, async (c) => {
+		const data = Buffer.from(await c.req.arrayBuffer());
+		if (data.length === 0) return c.json({ error: "The file is empty" }, 400);
+		return c.json(await importUpload(scopeOf(c), c.req.query("filename") ?? "", data));
+	});
 
-api.post("/skills/github", async (c) => {
-	const body = await c.req.json<{ url?: string }>();
-	return c.json(await importFromGitHub(c.get("user").id, String(body.url ?? "")));
-});
+	api.post(`${prefix}/github`, guard, async (c) => {
+		const body = await c.req.json<{ url?: string }>();
+		return c.json(await importFromGitHub(scopeOf(c), String(body.url ?? "")));
+	});
 
-api.post("/skills/:id/refresh", async (c) => c.json(await refreshSkill(c.get("user").id, c.req.param("id"))));
+	api.post(`${prefix}/:id/refresh`, guard, async (c) => c.json(await refreshSkill(scopeOf(c), c.req.param("id"))));
 
-api.put("/skills/:id", async (c) => {
-	const body = await c.req.json<{ content?: string; enabled?: boolean }>();
-	return c.json(await updateSkill(c.get("user").id, c.req.param("id"), body));
-});
+	api.put(`${prefix}/:id`, guard, async (c) => {
+		const body = await c.req.json<{ content?: string; enabled?: boolean }>();
+		return c.json(await updateSkill(scopeOf(c), c.req.param("id"), body));
+	});
 
-api.delete("/skills/:id", async (c) => {
-	await deleteSkill(c.get("user").id, c.req.param("id"));
-	return c.json({ ok: true });
-});
+	api.delete(`${prefix}/:id`, guard, async (c) => {
+		await deleteSkill(scopeOf(c), c.req.param("id"));
+		return c.json({ ok: true });
+	});
+}
+
+skillRoutes("/skills", (c) => c.get("user").id, async (_c, next) => next());
+skillRoutes("/org-skills", () => null, requireAdmin);
 
 // ---------------------------------------------------------------------------
 // Connections

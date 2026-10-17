@@ -137,10 +137,11 @@ create table if not exists project_members (
 	primary key (project_id, user_id)
 );
 
--- Skills each member adds for the coding agent; files holds the skill folder ([{path, encoding, content}]).
+-- Skills for the coding agent: a member's own, or the organization's (no user_id), which load for everyone.
+-- files holds the skill folder ([{path, encoding, content}]).
 create table if not exists user_skills (
 	id uuid primary key default gen_random_uuid(),
-	user_id uuid not null references users(id) on delete cascade,
+	user_id uuid references users(id) on delete cascade,
 	name text not null,
 	description text not null default '',
 	source text not null default '',
@@ -150,6 +151,7 @@ create table if not exists user_skills (
 	updated_at timestamptz not null default now(),
 	unique (user_id, name)
 );
+create unique index if not exists user_skills_org_name on user_skills (name) where user_id is null;
 `;
 
 export async function migrate(): Promise<void> {

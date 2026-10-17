@@ -5,12 +5,15 @@ import { githubReadToken } from "./github.ts";
 import { readZip } from "./zip.ts";
 
 /**
- * Skills each member adds for the coding agent. A skill is a folder with a SKILL.md (Agent Skills
+ * Skills for the coding agent: each member's own, plus the organization's that admins add for everyone. A skill is a folder with a SKILL.md (Agent Skills
  * format) and optional scripts, references and assets. Every build a member prompts runs pi with
  * that member's enabled skills, copied into the sandbox outside the app's workspace.
  */
 
 export class SkillError extends Error {}
+
+/** Whose skills: a member's id, or null for the organization's, which load for everyone. */
+export type Owner = string | null;
 
 export interface SkillFile {
 	path: string;
@@ -220,24 +223,24 @@ function summary(row: Omit<SkillRow, "files"> & { file_count: number }): SkillSu
 	};
 }
 
-export async function listSkills(userId: string): Promise<SkillSummary[]> {
+export async function listSkills(owner: Owner): Promise<SkillSummary[]> {
 	const rows = await query<Omit<SkillRow, "files"> & { file_count: number }>(
 		`select id, name, description, source, enabled, updated_at, jsonb_array_length(files) as file_count
-		 from user_skills where user_id = $1 order by name`,
-		[userId],
+		 from user_skills where user_id is not distinct from $1 order by name`,
+		[owner],
 	);
 	return rows.map(summary);
 }
 
-async function getRow(userId: string, id: string): Promise<SkillRow> {
-	const row = await queryOne<SkillRow>("select * from user_skills where id::text = $1 and user_id = $2", [id, userId]);
+async function getRow(owner: Owner, id: string): Promise<SkillRow> {
+	const row = await queryOne<SkillRow>("select * from user_skills where id::text = $1 and user_id is not distinct from $2", [id, owner]);
 	if (!row) throw new SkillError("Skill not found");
 	return row;
 }
 
 /** A skill with its SKILL.md and the list of its other files (binary files without contents). */
-export async function getSkill(userId: string, id: string) {
-	const row = await getRow(userId, id);
+export async function getSkill(owner: Owner, id: string) {
+	const row = await getRow(owner, id);
 	const skillMd = row.files.find((f) => f.path === "SKILL.md");
 	return {
 		...summary({ ...row, file_count: row.files.length }),
@@ -252,38 +255,43 @@ export async function getSkill(userId: string, id: string) {
 type SaveResult = { saved: { id: string; name: string; status: "added" | "updated" }[]; skipped: { name: string; reason: string }[] };
 
 /** Saves skills, replacing any of the member's skills with the same name (so importing again updates). */
-async function saveBundles(userId: string, bundles: Bundle[], sourceOf: (b: Bundle) => string): Promise<SaveResult["saved"]> {
-	const existing = await query<{ name: string }>("select name from user_skills where user_id = $1", [userId]);
+async function saveBundles(owner: Owner, bundles: Bundle[], sourceOf: (b: Bundle) => string): Promise<SaveResult["saved"]> {
+	const existing = await query<{ name: string }>("select name from user_skills where user_id is not distinct from $1", [owner]);
 	const names = new Set(existing.map((r) => r.name));
 	const added = bundles.filter((b) => !names.has(b.name)).length;
-	if (names.size + added > MAX_SKILLS) throw new SkillError(`You can have up to ${MAX_SKILLS} skills`);
+	if (names.size + added > MAX_SKILLS) throw new SkillError(`There can be up to ${MAX_SKILLS} skills`);
 	const saved: SaveResult["saved"] = [];
 	for (const bundle of bundles) {
-		const row = await queryOne<{ id: string }>(
-			`insert into user_skills (user_id, name, description, source, files) values ($1, $2, $3, $4, $5)
-			 on conflict (user_id, name) do update set description = excluded.description, source = excluded.source,
-			 files = excluded.files, updated_at = now()
-			 returning id`,
-			[userId, bundle.name, bundle.description, sourceOf(bundle), JSON.stringify(bundle.files)],
-		);
+		// Organization skills have no user, so "on conflict" can't match them; update first, then insert.
+		const values = [owner, bundle.name, bundle.description, sourceOf(bundle), JSON.stringify(bundle.files)];
+		const row =
+			(await queryOne<{ id: string }>(
+				`update user_skills set description = $3, source = $4, files = $5, updated_at = now()
+				 where user_id is not distinct from $1 and name = $2 returning id`,
+				values,
+			)) ??
+			(await queryOne<{ id: string }>(
+				"insert into user_skills (user_id, name, description, source, files) values ($1, $2, $3, $4, $5) returning id",
+				values,
+			));
 		saved.push({ id: row!.id, name: bundle.name, status: names.has(bundle.name) ? "updated" : "added" });
 	}
 	return saved;
 }
 
 /** A skill written in the browser: just a SKILL.md. */
-export async function createSkill(userId: string, content: string) {
+export async function createSkill(owner: Owner, content: string) {
 	const meta = parseFrontmatter(content);
 	checkNameAndDescription(meta.name?.trim(), meta.description?.trim(), "Skill");
-	const taken = await queryOne("select 1 from user_skills where user_id = $1 and name = $2", [userId, meta.name!.trim()]);
-	if (taken) throw new SkillError(`You already have a skill named ${meta.name!.trim()}`);
+	const taken = await queryOne("select 1 from user_skills where user_id is not distinct from $1 and name = $2", [owner, meta.name!.trim()]);
+	if (taken) throw new SkillError(`There is already a skill named ${meta.name!.trim()}`);
 	const files = [{ path: "SKILL.md", encoding: "utf8" as const, content }];
-	const [saved] = await saveBundles(userId, [{ name: meta.name!.trim(), description: meta.description!.trim(), files, dir: "" }], () => "");
-	return getSkill(userId, saved.id);
+	const [saved] = await saveBundles(owner, [{ name: meta.name!.trim(), description: meta.description!.trim(), files, dir: "" }], () => "");
+	return getSkill(owner, saved.id);
 }
 
 /** An uploaded SKILL.md, Markdown file, or zip (also .skill) holding one or more skill folders. */
-export async function importUpload(userId: string, filename: string, data: Buffer): Promise<SaveResult> {
+export async function importUpload(owner: Owner, filename: string, data: Buffer): Promise<SaveResult> {
 	if (data.length > MAX_UPLOAD_BYTES) throw new SkillError(`The file is larger than ${MAX_UPLOAD_BYTES / 1_000_000} MB`);
 	const isZip = data.length > 4 && data.readUInt32LE(0) === 0x04034b50;
 	let files: RawFile[];
@@ -299,11 +307,11 @@ export async function importUpload(userId: string, filename: string, data: Buffe
 		throw new SkillError("Upload a SKILL.md, a Markdown file, or a .zip of a skill folder");
 	}
 	const { bundles, skipped } = bundlesFrom(files, slug(filename) || "skill");
-	return { saved: await saveBundles(userId, bundles, () => `upload:${filename}`), skipped };
+	return { saved: await saveBundles(owner, bundles, () => `upload:${filename}`), skipped };
 }
 
-export async function updateSkill(userId: string, id: string, input: { content?: string; enabled?: boolean }) {
-	const row = await getRow(userId, id);
+export async function updateSkill(owner: Owner, id: string, input: { content?: string; enabled?: boolean }) {
+	const row = await getRow(owner, id);
 	if (typeof input.enabled === "boolean") {
 		await query("update user_skills set enabled = $1, updated_at = now() where id = $2", [input.enabled, row.id]);
 	}
@@ -311,8 +319,8 @@ export async function updateSkill(userId: string, id: string, input: { content?:
 		const meta = parseFrontmatter(input.content);
 		const name = meta.name?.trim();
 		checkNameAndDescription(name, meta.description?.trim(), "Skill");
-		if (name !== row.name && (await queryOne("select 1 from user_skills where user_id = $1 and name = $2", [userId, name]))) {
-			throw new SkillError(`You already have a skill named ${name}`);
+		if (name !== row.name && (await queryOne("select 1 from user_skills where user_id is not distinct from $1 and name = $2", [owner, name]))) {
+			throw new SkillError(`There is already a skill named ${name}`);
 		}
 		const files = [{ path: "SKILL.md", encoding: "utf8", content: input.content }, ...row.files.filter((f) => f.path !== "SKILL.md")];
 		await query("update user_skills set name = $1, description = $2, files = $3, updated_at = now() where id = $4", [
@@ -322,11 +330,11 @@ export async function updateSkill(userId: string, id: string, input: { content?:
 			row.id,
 		]);
 	}
-	return getSkill(userId, id);
+	return getSkill(owner, id);
 }
 
-export async function deleteSkill(userId: string, id: string): Promise<void> {
-	await query("delete from user_skills where id::text = $1 and user_id = $2", [id, userId]);
+export async function deleteSkill(owner: Owner, id: string): Promise<void> {
+	await query("delete from user_skills where id::text = $1 and user_id is not distinct from $2", [id, owner]);
 }
 
 // ---------------------------------------------------------------------------
@@ -351,7 +359,7 @@ interface TreeEntry {
 	size?: number;
 }
 
-export async function importFromGitHub(userId: string, url: string): Promise<SaveResult> {
+export async function importFromGitHub(scope: Owner, url: string): Promise<SaveResult> {
 	const match = GITHUB_URL.exec(url.trim());
 	if (!match) throw new SkillError("Paste a github.com link to a repository, a folder, or a SKILL.md");
 	const [, owner, repo, kind, rest] = match;
@@ -426,30 +434,39 @@ export async function importFromGitHub(userId: string, url: string): Promise<Sav
 		const dir = [base, b.dir].filter(Boolean).join("/");
 		return `https://github.com/${owner}/${repo}/tree/${ref}${dir ? `/${dir}` : ""}`;
 	};
-	return { saved: await saveBundles(userId, bundles, sourceOf), skipped };
+	return { saved: await saveBundles(scope, bundles, sourceOf), skipped };
 }
 
 /** Imports a GitHub skill again from where it came from. */
-export async function refreshSkill(userId: string, id: string): Promise<SaveResult> {
-	const row = await getRow(userId, id);
+export async function refreshSkill(owner: Owner, id: string): Promise<SaveResult> {
+	const row = await getRow(owner, id);
 	if (!GITHUB_URL.test(row.source)) throw new SkillError("Only skills imported from GitHub can be updated from their source");
-	return importFromGitHub(userId, row.source);
+	return importFromGitHub(owner, row.source);
 }
 
 // ---------------------------------------------------------------------------
 // Loading skills into a sandbox
 
-/** Changes whenever the member's enabled skills change, so the agent knows to restart with the new set. */
-export async function skillsFingerprint(userId: string): Promise<string> {
-	const rows = await query<{ id: string; updated_at: Date }>(
-		"select id, updated_at from user_skills where user_id = $1 and enabled order by id",
+/**
+ * What a member's builds load: their enabled skills, then the organization's enabled ones. pi keeps
+ * the first skill of a name, so a member's own skill wins over an organization skill of the same name.
+ */
+async function effectiveSkills<T>(userId: string, columns: string): Promise<(T & { name: string })[]> {
+	return query<T & { name: string }>(
+		`select distinct on (name) ${columns} from user_skills
+		 where enabled and (user_id = $1 or user_id is null)
+		 order by name, user_id nulls last`,
 		[userId],
 	);
+}
+
+/** Changes whenever the skills a member's builds load change, so the agent knows to restart with the new set. */
+export async function skillsFingerprint(userId: string): Promise<string> {
+	const rows = await effectiveSkills<{ id: string; updated_at: Date }>(userId, "name, id, updated_at");
 	return createHash("sha256")
 		.update(rows.map((r) => `${r.id}@${new Date(r.updated_at).toISOString()}`).join(","))
 		.digest("hex");
 }
-
 // Runs inside the sandbox with Node: replaces the skills folder with the files sent on stdin.
 const INSTALL_SCRIPT = `
 const fs = require("fs"), path = require("path");
@@ -472,15 +489,12 @@ process.stdin.on("data", (d) => (input += d)).on("end", () => {
 `;
 
 /**
- * Copies a member's enabled skills into the sandbox and returns the folders to pass to pi.
+ * Copies the skills a member's builds load (theirs and the organization's) into the sandbox and returns the folders to pass to pi.
  * Returns the fingerprint of what was installed.
  */
 export async function installSkills(container: string, userId: string): Promise<{ dirs: string[]; fingerprint: string }> {
 	const fingerprint = await skillsFingerprint(userId);
-	const rows = await query<{ name: string; files: SkillFile[] }>(
-		"select name, files from user_skills where user_id = $1 and enabled order by name",
-		[userId],
-	);
+	const rows = await effectiveSkills<{ files: SkillFile[] }>(userId, "name, files");
 	const result = await execArgv(container, ["node", "-e", INSTALL_SCRIPT], {
 		input: JSON.stringify({ root: SANDBOX_SKILLS_DIR, skills: rows }),
 	});

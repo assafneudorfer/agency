@@ -1445,7 +1445,7 @@ function GitHubPanel({ project, running, open }) {
 	if (!info) return html`<div class="sheet-body">${error ? html`<p class="error">${error}</p>` : html`<div class="empty"><span class="spinner"></span></div>`}</div>`;
 	if (!info.configured) {
 		return html`<div class="sheet-body">
-			<div class="callout">Push this app's code to your organization's GitHub. An admin connects GitHub once under <a href="#/settings">Settings</a>.</div>
+			<div class="callout">Push this app's code to your organization's GitHub. An admin connects GitHub once under <a href="#/settings/github">Settings</a>.</div>
 		</div>`;
 	}
 	if (!info.repo) {
@@ -1864,7 +1864,7 @@ function Connections({ user }) {
 		const params = new URLSearchParams(location.hash.split("?")[1] ?? "");
 		if (params.get("connected")) toast(`Connected ${params.get("connected")}`);
 		if (params.get("oauth_error")) toast(`Sign-in failed: ${params.get("oauth_error")}`, "error");
-		if (params.size) history.replaceState(null, "", "#/connections");
+		if (params.size) history.replaceState(null, "", "#/settings/connections");
 	}, []);
 	const spec = CONNECTION_TYPES[type];
 	const set = (key) => (e) => setForm({ ...form, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
@@ -2103,13 +2103,13 @@ function savedMessage(result) {
 	return `${verb} ${text}${result.skipped.length ? `; skipped ${result.skipped.length}` : ""}`;
 }
 
-function SkillEditor({ id, onSaved, onClose }) {
+function SkillEditor({ base, id, readOnly, onSaved, onClose }) {
 	const [skill, setSkill] = useState(null);
 	const [content, setContent] = useState("");
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
 	useEffect(() => {
-		api(`/skills/${id}`).then(
+		api(`${base}/${id}`).then(
 			(data) => {
 				setSkill(data);
 				setContent(data.content);
@@ -2122,7 +2122,7 @@ function SkillEditor({ id, onSaved, onClose }) {
 		setBusy(true);
 		setError("");
 		try {
-			await api(`/skills/${id}`, { method: "PUT", body: { content } });
+			await api(`${base}/${id}`, { method: "PUT", body: { content } });
 			toast("Saved. Your next message to the agent uses it.");
 			onSaved();
 			onClose();
@@ -2135,7 +2135,7 @@ function SkillEditor({ id, onSaved, onClose }) {
 	return html`<div class="sheet-body">
 		<label class="field">
 			<span>SKILL.md</span>
-			<textarea class="textarea mono skill-md" rows="16" spellcheck="false" value=${content} onInput=${(e) => setContent(e.target.value)}></textarea>
+			<textarea class="textarea mono skill-md" rows="16" spellcheck="false" readOnly=${readOnly} value=${content} onInput=${(e) => setContent(e.target.value)}></textarea>
 		</label>
 		${others.length > 0 &&
 		html`<div class="field">
@@ -2145,9 +2145,10 @@ function SkillEditor({ id, onSaved, onClose }) {
 			</ul>
 		</div>`}
 		${error && html`<p class="error">${error}</p>`}
-		<button class="btn primary" disabled=${busy || content === skill.content} onClick=${save}>
+		${!readOnly &&
+		html`<button class="btn primary" disabled=${busy || content === skill.content} onClick=${save}>
 			${busy ? html`<span class="spinner"></span>` : icon("check")} Save
-		</button>
+		</button>`}
 	</div>`;
 }
 
@@ -2159,7 +2160,15 @@ function bytes(size) {
 
 const SKILL_TABS = ["github", "upload", "write"];
 
-function Skills() {
+/**
+ * A list of skills with ways to add more. scope "me" is the member's own; "org" is the organization's,
+ * which every build loads and only admins change.
+ */
+function Skills({ scope, user }) {
+	const org = scope === "org";
+	const base = org ? "/org-skills" : "/skills";
+	const canEdit = !org || user.role === "admin";
+	const [orgNames, setOrgNames] = useState([]);
 	const [skills, setSkills] = useState(null);
 	const [template, setTemplate] = useState("");
 	const [tab, setTab] = useState("github");
@@ -2171,7 +2180,7 @@ function Skills() {
 	const [dragging, setDragging] = useState(false);
 	const fileInput = useRef(null);
 	const load = () =>
-		api("/skills").then(
+		api(base).then(
 			(data) => {
 				setSkills(data.skills);
 				setTemplate(data.template);
@@ -2181,6 +2190,7 @@ function Skills() {
 		);
 	useEffect(() => {
 		load();
+		if (!org) api("/org-skills").then((data) => setOrgNames(data.skills.filter((s) => s.enabled).map((s) => s.name)), () => {});
 	}, []);
 	const run = async (what, action) => {
 		setBusy(what);
@@ -2195,7 +2205,7 @@ function Skills() {
 	const importGitHub = (e, link = url) => {
 		e?.preventDefault();
 		return run("github", async () => {
-			const result = await api("/skills/github", { method: "POST", body: { url: link.trim() } });
+			const result = await api(`${base}/github`, { method: "POST", body: { url: link.trim() } });
 			toast(savedMessage(result));
 			setUrl("");
 			await load();
@@ -2204,7 +2214,7 @@ function Skills() {
 	const upload = (file) =>
 		file &&
 		run("upload", async () => {
-			const response = await fetch(`/api/skills/upload?filename=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+			const response = await fetch(`/api${base}/upload?filename=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
 			const data = await response.json();
 			if (!response.ok) throw new Error(data.error ?? `Upload failed (${response.status})`);
 			toast(savedMessage(data));
@@ -2213,7 +2223,7 @@ function Skills() {
 	const write = (e) => {
 		e.preventDefault();
 		return run("write", async () => {
-			const skill = await api("/skills", { method: "POST", body: { content } });
+			const skill = await api(base, { method: "POST", body: { content } });
 			toast(`Added ${skill.name}`);
 			setContent(template);
 			await load();
@@ -2221,11 +2231,11 @@ function Skills() {
 	};
 	const toggle = async (skill) => {
 		setSkills(skills.map((s) => (s.id === skill.id ? { ...s, enabled: !s.enabled } : s)));
-		await api(`/skills/${skill.id}`, { method: "PUT", body: { enabled: !skill.enabled } }).catch((err) => toast(err.message, "error"));
+		await api(`${base}/${skill.id}`, { method: "PUT", body: { enabled: !skill.enabled } }).catch((err) => toast(err.message, "error"));
 		load();
 	};
 	const refresh = (skill) =>
-		api(`/skills/${skill.id}/refresh`, { method: "POST" }).then(
+		api(`${base}/${skill.id}/refresh`, { method: "POST" }).then(
 			(result) => {
 				toast(savedMessage(result));
 				load();
@@ -2233,37 +2243,57 @@ function Skills() {
 			(err) => toast(err.message, "error"),
 		);
 	const remove = async (skill) => {
-		if (!confirm(`Remove ${skill.name}? The agent stops using it in your next message.`)) return;
-		await api(`/skills/${skill.id}`, { method: "DELETE" });
+		const who = org ? "Builds stop" : "The agent stops";
+		if (!confirm(`Remove ${skill.name}? ${who} using it from the next message.`)) return;
+		await api(`${base}/${skill.id}`, { method: "DELETE" });
 		load();
 	};
 	const enabled = (skills ?? []).filter((s) => s.enabled).length;
 	return html`<div class="page">
 		<header class="page-head">
-			<h1>Skills</h1>
-			<p>
-				Teach the agent how you like things built: your design system, a library you use, a checklist. Skills are yours; every app you build
-				uses the ones that are on. Type <span class="mono">/skill:name</span> in a chat to use one on purpose.
-			</p>
+			<h1>${org ? "Organization skills" : "My skills"}</h1>
+			${org
+				? html`<p>
+						${`Skills every member's builds use: your design system, approved libraries, how to reach your data. ${canEdit ? "Only admins change them." : "Your admin manages them."} A member's own skill with the same name takes its place.`}
+					</p>`
+				: html`<p>
+						Teach the agent how you like things built: a library you use, a checklist, your style. Every app you build uses the ones that are
+						on. Type <span class="mono">/skill:name</span> in a chat to use one on purpose.
+					</p>`}
 		</header>
 		<div class="stack">
+			${!org &&
+			orgNames.length > 0 &&
+			html`<a class="callout skill-org-note" href="#/settings/org-skills">
+				${icon("users")} <span class="grow">Your builds also use ${orgNames.length} organization ${orgNames.length === 1 ? "skill" : "skills"}.</span>
+				${icon("chevron")}
+			</a>`}
 			<div class="card">
 				${skills === null
 					? html`<div class="empty"><span class="spinner"></span></div>`
 					: skills.length === 0
-						? html`<div class="empty">${icon("wand")} No skills yet. Add one below.</div>`
+						? html`<div class="empty">${icon("wand")} ${canEdit ? "No skills yet. Add one below." : "No organization skills yet."}</div>`
 						: html`<div class="card-head row">
-									<h2 class="grow">Your skills</h2>
+									<h2 class="grow">${org ? "For everyone" : "Your skills"}</h2>
 									<span class="faint">${enabled} of ${skills.length} on</span>
 								</div>
 								${skills.map(
 									(skill) => html`<div class=${`list-row skill-row${skill.enabled ? "" : " off"}`}>
 										<label class="switch" title=${skill.enabled ? "On: the agent can use it" : "Off"}>
-											<input type="checkbox" checked=${skill.enabled} onChange=${() => toggle(skill)} aria-label=${`Use ${skill.name}`} />
+											<input
+												type="checkbox"
+												checked=${skill.enabled}
+												disabled=${!canEdit}
+												onChange=${() => toggle(skill)}
+												aria-label=${`Use ${skill.name}`}
+											/>
 											<span></span>
 										</label>
 										<div class="grow">
-											<div class="title mono">${skill.name}</div>
+											<div class="title">
+												<span class="mono">${skill.name}</span>
+												${!org && orgNames.includes(skill.name) && html`<span class="badge" title="Your builds use this one instead of the organization's">Replaces organization skill</span>`}
+											</div>
 											<div class="sub clamp">${skill.description}</div>
 											<div class="sub skill-meta">
 												${skillSource(skill.source)}
@@ -2272,15 +2302,17 @@ function Skills() {
 											</div>
 										</div>
 										<div class="row-actions">
-											${skill.source.startsWith("https://github.com/") &&
+											${canEdit &&
+											skill.source.startsWith("https://github.com/") &&
 											html`<button class="btn sm" title="Import again from GitHub" onClick=${() => refresh(skill)}>${icon("refresh")} Update</button>`}
-											<button class="btn sm" onClick=${() => setEditing(skill)}>Edit</button>
-											<button class="btn sm danger" title="Remove" onClick=${() => remove(skill)}>${icon("trash")}</button>
+											<button class="btn sm" onClick=${() => setEditing(skill)}>${canEdit ? "Edit" : "View"}</button>
+											${canEdit && html`<button class="btn sm danger" title="Remove" onClick=${() => remove(skill)}>${icon("trash")}</button>`}
 										</div>
 									</div>`,
 								)}`}
 			</div>
-			<div class="card">
+			${canEdit &&
+			html`<div class="card">
 				<div class="card-head">
 					<h2>Add a skill</h2>
 					<p>Any skill in the Agent Skills format works: a folder with a SKILL.md, plus scripts or references if it has them.</p>
@@ -2355,10 +2387,11 @@ function Skills() {
 					</form>`}
 					${error && html`<p class="error">${error}</p>`}
 				</div>
-			</div>
+			</div>`}
 		</div>
 		<${Sheet} open=${Boolean(editing)} title=${editing?.name ?? ""} onClose=${() => setEditing(null)}>
-			${editing && html`<${SkillEditor} key=${editing.id} id=${editing.id} onSaved=${load} onClose=${() => setEditing(null)} />`}
+			${editing &&
+			html`<${SkillEditor} key=${editing.id} base=${base} id=${editing.id} readOnly=${!canEdit} onSaved=${load} onClose=${() => setEditing(null)} />`}
 		</${Sheet}>
 	</div>`;
 }
@@ -2851,7 +2884,8 @@ function GitHubSettings({ github, newApps, onSaved }) {
 	</form>`;
 }
 
-function Settings() {
+/** Single sign-on or GitHub: organization settings stored on the server, for admins. */
+function OrgSettings({ part }) {
 	const [data, setData] = useState(null);
 	const [error, setError] = useState("");
 	const load = () => api("/settings").then(setData, (err) => setError(err.message));
@@ -2861,20 +2895,82 @@ function Settings() {
 		const params = new URLSearchParams(location.hash.split("?")[1] ?? "");
 		if (params.get("github") === "connected") toast("GitHub connected");
 		if (params.get("github_error")) toast(`GitHub: ${params.get("github_error")}`, "error");
-		if (params.size) history.replaceState(null, "", "#/settings");
+		if (params.size) history.replaceState(null, "", "#/settings/github");
 	}, []);
+	const head =
+		part === "sso"
+			? html`<h1>Single sign-on</h1>
+					<p>How members of your organization sign in.</p>`
+			: html`<h1>GitHub</h1>
+					<p>Where apps keep their code.</p>`;
 	return html`<div class="page">
-		<header class="page-head">
-			<h1>Settings</h1>
-			<p>How your organization signs in, and where apps keep their code.</p>
-		</header>
+		<header class="page-head">${head}</header>
 		${error && html`<p class="error">${error}</p>`}
 		${data === null
 			? html`<div class="empty"><span class="spinner"></span></div>`
-			: html`<div class="stack">
-					<${SsoSettings} sso=${data.sso} publicUrl=${data.publicUrl} onSaved=${load} />
-					<${GitHubSettings} github=${data.github} newApps=${data.githubNewApps} onSaved=${load} />
-				</div>`}
+			: part === "sso"
+				? html`<${SsoSettings} sso=${data.sso} publicUrl=${data.publicUrl} onSaved=${load} />`
+				: html`<${GitHubSettings} github=${data.github} newApps=${data.githubNewApps} onSaved=${load} />`}
+	</div>`;
+}
+
+// Settings sections, grouped the usual way: what is yours, then what the whole organization shares.
+const SETTINGS_GROUPS = [
+	{
+		label: "Account",
+		items: [
+			{ key: "skills", label: "My skills", icon: "wand" },
+			{ key: "usage", label: "Usage", icon: "gauge" },
+		],
+	},
+	{
+		label: "Organization",
+		items: [
+			{ key: "connections", label: "Connections", icon: "database" },
+			{ key: "org-skills", label: "Skills", icon: "sparkles" },
+			{ key: "team", label: "Team", icon: "users", admin: true },
+			{ key: "sso", label: "Single sign-on", icon: "lock", admin: true },
+			{ key: "github", label: "GitHub", icon: "github", admin: true },
+		],
+	},
+];
+
+function Settings({ user, section, onUsageChange }) {
+	const phone = usePhone();
+	const groups = SETTINGS_GROUPS.map((g) => ({ ...g, items: g.items.filter((item) => !item.admin || user.role === "admin") }));
+	const keys = groups.flatMap((g) => g.items.map((item) => item.key));
+	// A phone shows the list of sections first; a wider screen opens the first section next to it.
+	const current = keys.includes(section) ? section : phone ? null : keys[0];
+	const content = {
+		skills: () => html`<${Skills} key="me" scope="me" user=${user} />`,
+		"org-skills": () => html`<${Skills} key="org" scope="org" user=${user} />`,
+		usage: () => html`<${UsagePage} />`,
+		connections: () => html`<${Connections} user=${user} />`,
+		team: () => html`<${Team} user=${user} onChange=${onUsageChange} />`,
+		sso: () => html`<${OrgSettings} key="sso" part="sso" />`,
+		github: () => html`<${OrgSettings} key="github" part="github" />`,
+	}[current];
+	const nav = html`<nav class="settings-nav" aria-label="Settings">
+		${groups.map(
+			(group) => html`<div class="settings-group">
+				<div class="settings-group-label">${group.label}</div>
+				${group.items.map(
+					(item) => html`<a href=${`#/settings/${item.key}`} class="settings-link" aria-current=${current === item.key ? "page" : undefined}>
+						${icon(item.icon)} <span class="grow">${item.label}</span> ${icon("chevron", "go")}
+					</a>`,
+				)}
+			</div>`,
+		)}
+	</nav>`;
+	if (phone && !current) {
+		return html`<div class="page settings-index">
+			<header class="page-head"><h1>Settings</h1></header>
+			${nav}
+		</div>`;
+	}
+	return html`<div class="settings">
+		${phone ? html`<a class="settings-back" href="#/settings">${icon("arrowLeft")} Settings</a>` : nav}
+		<div class="settings-body">${content?.()}</div>
 	</div>`;
 }
 
@@ -2900,11 +2996,14 @@ function App() {
 		if (!user) return null;
 		const project = /^\/p\/([0-9a-f-]+)/.exec(route);
 		if (project) return html`<${Builder} id=${project[1]} />`;
-		if (route.startsWith("/connections")) return html`<${Connections} user=${user} />`;
-		if (route.startsWith("/team")) return html`<${Team} user=${user} onChange=${refreshUsage} />`;
-		if (route.startsWith("/usage")) return html`<${UsagePage} />`;
-		if (route.startsWith("/skills")) return html`<${Skills} />`;
-		if (route.startsWith("/settings") && user.role === "admin") return html`<${Settings} />`;
+		// Pages that moved under Settings keep working from old links.
+		const moved = /^\/(connections|usage|team|skills)\b/.exec(route);
+		if (moved) {
+			location.replace(`#/settings/${moved[1]}${route.slice(moved[0].length)}`);
+			return null;
+		}
+		const settings = /^\/settings(?:\/([a-z-]+))?/.exec(route);
+		if (settings) return html`<${Settings} user=${user} section=${settings[1]} onUsageChange=${refreshUsage} />`;
 		return html`<${Home} />`;
 	}, [route, user]);
 	// Spend changes as the agent works, so the sidebar meter refreshes on every navigation.
@@ -2931,7 +3030,7 @@ function App() {
 				<a class="brand" href="#/"><img src="/static/logo.png" alt="" /> <b>Agency</b></a>
 				<span class="grow"></span>
 				${usage &&
-				html`<a class="usage-pill" href="#/usage" title="Your AI usage this month">
+				html`<a class="usage-pill" href="#/settings/usage" title="Your AI usage this month">
 					${!usage.unlimited && html`<${Meter} spent=${usage.spentUsd} budget=${usage.budgetUsd} />`}
 					<span class="mono">${money(usage.spentUsd)}</span>
 				</a>`}
@@ -2940,12 +3039,10 @@ function App() {
 			</header>
 			<nav class="nav">
 				<a class="brand" href="#/"><img src="/static/logo.png" alt="" /> <b>Agency</b></a>
-				${link("#/", "Apps", "apps")} ${link("#/connections", "Connections", "database")} ${link("#/skills", "Skills", "wand")}
-				${link("#/usage", "Usage", "gauge")} ${user.role === "admin" && link("#/team", "Team", "users")}
-				${user.role === "admin" && link("#/settings", "Settings", "settings")}
+				${link("#/", "Apps", "apps")} ${link("#/settings", "Settings", "settings")}
 				<span class="spacer"></span>
 				${usage &&
-				html`<a class="usage-chip" href="#/usage" title="Your AI usage this month">
+				html`<a class="usage-chip" href="#/settings/usage" title="Your AI usage this month">
 					<div class="row"><span class="grow">AI usage</span><span class="mono">${spendLabel(usage)}</span></div>
 					<${Meter} spent=${usage.spentUsd} budget=${usage.budgetUsd} unlimited=${usage.unlimited} />
 				</a>`}

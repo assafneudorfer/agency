@@ -58,6 +58,9 @@ import {
 	finishAppInstall,
 	finishAppManifest,
 	getGitHub,
+	linkNewApp,
+	newAppsDefaults,
+	saveNewAppsDefaults,
 	GitHubError,
 	gitHubView,
 	linkRepository,
@@ -250,6 +253,7 @@ api.post("/projects", async (c) => {
 	const user = c.get("user");
 	if (body.prompt?.trim()) await assertBudget(user.id);
 	const project = await createProject(name, user.id);
+	linkNewApp(project.id);
 	if (body.prompt?.trim()) {
 		bridgeFor(project)
 			.prompt(body.prompt.trim(), user.id)
@@ -562,7 +566,11 @@ api.post("/projects/:id/github/push", async (c) => {
 // ---------------------------------------------------------------------------
 // Settings: single sign-on and GitHub (admins)
 
-api.get("/settings", requireAdmin, async (c) => c.json({ sso: await ssoView(), github: await gitHubView(), publicUrl: config.publicUrl }));
+api.get("/settings", requireAdmin, async (c) =>
+	c.json({ sso: await ssoView(), github: await gitHubView(), githubNewApps: await newAppsDefaults(), publicUrl: config.publicUrl }),
+);
+
+api.put("/settings/github/new-apps", requireAdmin, async (c) => c.json(await saveNewAppsDefaults(await c.req.json())));
 
 api.put("/settings/sso", requireAdmin, async (c) => c.json(await saveSso(await c.req.json())));
 

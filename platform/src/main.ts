@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { compress } from "hono/compress";
 import { streamSSE } from "hono/streaming";
 import { type AgentEvent, bridgeFor, dropBridge } from "./agent.ts";
@@ -54,6 +54,9 @@ import {
 } from "./projects.ts";
 import {
 	autoPush,
+	appManifestPage,
+	finishAppInstall,
+	finishAppManifest,
 	getGitHub,
 	GitHubError,
 	gitHubView,
@@ -128,6 +131,42 @@ app.get("/oauth/callback", async (c) => {
 		return back({ connected: name });
 	} catch (err) {
 		return back({ oauth_error: errorMessage(err) });
+	}
+});
+
+// One-click GitHub: create the app from a manifest on GitHub, then install it on the organization.
+const settingsBack = (c: Context<AppEnv>, params: Record<string, string>) => c.redirect(`/#/settings?${new URLSearchParams(params)}`, 302);
+
+app.get("/github/app/start", async (c) => {
+	const user = await currentUser(c);
+	if (!user || user.role !== "admin") return settingsBack(c, { github_error: "Only admins can connect GitHub" });
+	try {
+		return c.html(appManifestPage({ owner: c.req.query("owner"), webUrl: c.req.query("webUrl") }));
+	} catch (error) {
+		return settingsBack(c, { github_error: errorMessage(error) });
+	}
+});
+
+app.get("/github/app/created", async (c) => {
+	const user = await currentUser(c);
+	if (!user || user.role !== "admin") return settingsBack(c, { github_error: "Sign in as an admin, then click Connect GitHub again." });
+	try {
+		return c.redirect(await finishAppManifest(c.req.query("state") ?? "", c.req.query("code") ?? ""), 302);
+	} catch (error) {
+		return settingsBack(c, { github_error: errorMessage(error) });
+	}
+});
+
+app.get("/github/app/installed", async (c) => {
+	const user = await currentUser(c);
+	if (!user || user.role !== "admin") return settingsBack(c, { github_error: "Sign in as an admin to finish connecting GitHub." });
+	// An organization member who isn't an owner can only request the install; an owner approves it on GitHub.
+	if (c.req.query("setup_action") === "request") return settingsBack(c, { github_error: "GitHub sent the install to an organization owner to approve. Come back here once they do." });
+	try {
+		await finishAppInstall(Number(c.req.query("installation_id")));
+		return settingsBack(c, { github: "connected" });
+	} catch (error) {
+		return settingsBack(c, { github_error: errorMessage(error) });
 	}
 });
 

@@ -2425,3 +2425,7 @@ code {
 	height: 14px;
 	vertical-align: -2px;
 }
+
+.card-foot .link-btn:first-child {
+	margin-right: auto;
+}

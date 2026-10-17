@@ -2331,16 +2331,29 @@ function SsoSettings({ sso, publicUrl, onSaved }) {
 }
 
 function GitHubSettings({ github, onSaved }) {
-	const [form, setForm] = useState(() => ({ apiUrl: github?.apiUrl ?? "https://api.github.com", owner: github?.owner ?? "", token: "" }));
+	const [form, setForm] = useState(() => ({
+		apiUrl: github?.apiUrl ?? "https://api.github.com",
+		webUrl: github?.webUrl ?? "https://github.com",
+		owner: github?.owner ?? "",
+		token: "",
+	}));
+	const [useToken, setUseToken] = useState(github?.mode === "token");
+	const [enterprise, setEnterprise] = useState(Boolean(github && github.webUrl !== "https://github.com"));
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
 	const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
-	const save = async (e) => {
+	// One click: the server sends the browser to GitHub with the app's manifest.
+	const connectApp = (e) => {
+		e.preventDefault();
+		const params = new URLSearchParams({ owner: form.owner.trim(), webUrl: enterprise ? form.webUrl.trim() : "https://github.com" });
+		location.href = `/github/app/start?${params}`;
+	};
+	const saveToken = async (e) => {
 		e.preventDefault();
 		setBusy(true);
 		setError("");
 		try {
-			await api("/settings/github", { method: "PUT", body: form });
+			await api("/settings/github", { method: "PUT", body: { owner: form.owner, token: form.token, apiUrl: form.apiUrl } });
 			toast("GitHub connected");
 			setForm({ ...form, token: "" });
 			onSaved();
@@ -2350,41 +2363,96 @@ function GitHubSettings({ github, onSaved }) {
 		setBusy(false);
 	};
 	const remove = async () => {
-		if (!confirm("Disconnect GitHub? Apps keep their links but can't push until it is connected again.")) return;
+		const note = github?.mode === "app" ? " The app is uninstalled from your organization; an owner can delete it on GitHub." : "";
+		if (!confirm(`Disconnect GitHub? Apps keep their links but can't push until it is connected again.${note}`)) return;
 		await api("/settings/github", { method: "DELETE" });
+		setUseToken(false);
 		onSaved();
 	};
-	return html`<form class="card" onSubmit=${save}>
-		<div class="card-head">
-			<h2>
-				${icon("github")} GitHub
-				${github ? html`<span class="badge live"><span class="dot"></span>Connected as ${github.account}</span>` : html`<span class="badge">Not connected</span>`}
-			</h2>
-			<p>Apps push their code to repositories in your organization, from the GitHub button in the builder.</p>
-		</div>
+	const connected = github?.installed;
+	const head = html`<div class="card-head">
+		<h2>
+			${icon("github")} GitHub
+			${connected
+				? html`<span class="badge live"><span class="dot"></span>Connected to ${github.owner}</span>`
+				: github
+					? html`<span class="badge warn">Not installed yet</span>`
+					: html`<span class="badge">Not connected</span>`}
+		</h2>
+		<p>Apps push their code to repositories in your organization, from the GitHub button in the builder.</p>
+	</div>`;
+
+	if (github?.mode === "app") {
+		return html`<div class="card">
+			${head}
+			<div class="card-body">
+				${connected
+					? html`<p class="muted">
+							Pushes as <span class="mono">${github.account}</span> with tokens that last an hour. Choose which repositories it can use in the${" "}
+							<a href=${github.installationUrl} target="_blank" rel="noopener">installation settings</a>.
+						</p>`
+					: html`<p class="muted">The app <span class="mono">${github.account.replace("[bot]", "")}</span> was created in ${github.owner}. Install it on the organization to finish.</p>`}
+			</div>
+			<div class="card-foot">
+				<button type="button" class="btn danger" onClick=${remove}>Disconnect</button>
+				${!connected && html`<a class="btn primary" href=${github.installUrl}>${icon("github")} Install on ${github.owner}</a>`}
+			</div>
+		</div>`;
+	}
+
+	if (useToken) {
+		return html`<form class="card" onSubmit=${saveToken}>
+			${head}
+			<div class="card-body form-grid">
+				<ol class="steps wide">
+					<li>On GitHub, open Settings > Developer settings > Fine-grained tokens and generate a token with your organization as the resource owner.</li>
+					<li>Give it access to all repositories (or the ones apps should use) with Contents: Read and write and Administration: Read and write, so it can create repositories.</li>
+					<li>Paste it here with the organization's name.</li>
+				</ol>
+				<label class="field">
+					<span>Organization</span>
+					<input class="input mono" placeholder="acme" value=${form.owner} onInput=${set("owner")} required />
+				</label>
+				<label class="field">
+					<span>Token ${github && html`<span class="hint">saved; leave empty to keep</span>`}</span>
+					<input class="input mono" type="password" placeholder="github_pat_..." value=${form.token} onInput=${set("token")} required=${!github} />
+				</label>
+				<label class="field wide">
+					<span>API URL <span class="hint">change only for GitHub Enterprise Server</span></span>
+					<input class="input mono" value=${form.apiUrl} onInput=${set("apiUrl")} />
+				</label>
+				${error && html`<div class="error wide">${error}</div>`}
+			</div>
+			<div class="card-foot">
+				${github
+					? html`<button type="button" class="btn danger" onClick=${remove}>Disconnect</button>`
+					: html`<button type="button" class="link-btn" onClick=${() => setUseToken(false)}>Connect in one click instead</button>`}
+				<button class="btn primary" disabled=${busy}>${busy && html`<span class="spinner"></span>`} ${github ? "Save" : "Connect GitHub"}</button>
+			</div>
+		</form>`;
+	}
+
+	return html`<form class="card" onSubmit=${connectApp}>
+		${head}
 		<div class="card-body form-grid">
-			<ol class="steps wide">
-				<li>On GitHub, open Settings > Developer settings > Fine-grained tokens and generate a token with your organization as the resource owner.</li>
-				<li>Give it access to all repositories (or the ones apps should use) with Contents: Read and write and Administration: Read and write, so it can create repositories.</li>
-				<li>Paste it here with the organization's name.</li>
-			</ol>
-			<label class="field">
+			<p class="muted wide">
+				Agency creates a private GitHub App in your organization and installs it. You confirm both on GitHub; you need to be an organization owner.
+				It can only create repositories and push code to them.
+			</p>
+			<label class="field wide">
 				<span>Organization</span>
 				<input class="input mono" placeholder="acme" value=${form.owner} onInput=${set("owner")} required />
 			</label>
-			<label class="field">
-				<span>Token ${github && html`<span class="hint">saved; leave empty to keep</span>`}</span>
-				<input class="input mono" type="password" placeholder="github_pat_..." value=${form.token} onInput=${set("token")} required=${!github} />
-			</label>
-			<label class="field wide">
-				<span>API URL <span class="hint">change only for GitHub Enterprise Server</span></span>
-				<input class="input mono" value=${form.apiUrl} onInput=${set("apiUrl")} />
-			</label>
-			${error && html`<div class="error wide">${error}</div>`}
+			${enterprise &&
+			html`<label class="field wide">
+				<span>GitHub Enterprise Server address</span>
+				<input class="input mono" placeholder="https://github.example.com" value=${form.webUrl} onInput=${set("webUrl")} required />
+			</label>`}
 		</div>
 		<div class="card-foot">
-			${github && html`<button type="button" class="btn danger" onClick=${remove}>Disconnect</button>`}
-			<button class="btn primary" disabled=${busy}>${busy && html`<span class="spinner"></span>`} ${github ? "Save" : "Connect GitHub"}</button>
+			<button type="button" class="link-btn" onClick=${() => setEnterprise(!enterprise)}>${enterprise ? "Use github.com" : "GitHub Enterprise Server?"}</button>
+			<button type="button" class="link-btn" onClick=${() => setUseToken(true)}>Use a token instead</button>
+			<button class="btn primary">${icon("github")} Connect GitHub</button>
 		</div>
 	</form>`;
 }
@@ -2395,6 +2463,11 @@ function Settings() {
 	const load = () => api("/settings").then(setData, (err) => setError(err.message));
 	useEffect(() => {
 		load();
+		// Back from GitHub after creating or installing the app.
+		const params = new URLSearchParams(location.hash.split("?")[1] ?? "");
+		if (params.get("github") === "connected") toast("GitHub connected");
+		if (params.get("github_error")) toast(`GitHub: ${params.get("github_error")}`, "error");
+		if (params.size) history.replaceState(null, "", "#/settings");
 	}, []);
 	return html`<div class="page">
 		<header class="page-head">

@@ -5,6 +5,7 @@ import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { compress } from "hono/compress";
 import { streamSSE } from "hono/streaming";
 import { type AgentEvent, bridgeFor, dropBridge } from "./agent.ts";
+import { type Attachment, checkAttachments, modelImages, promptWithAttachments, saveAttachments } from "./attachments.ts";
 import { AccessError, assertRole, atLeast, getSharing, type ProjectRole, projectRole, setMember, setTeamAccess, visibleProjects } from "./access.ts";
 import { closeDataPools, DataError, deleteRow, insertRow, listTables, readRows, runSql, updateRow } from "./appdata.ts";
 import {
@@ -124,6 +125,7 @@ app.onError((error, c) => {
 	if (error instanceof BudgetError) return c.json({ error: error.message, code: "budget" }, 402);
 	if (error instanceof DataError) return c.json({ error: error.message }, 400);
 	if (error instanceof AccessError) return c.json({ error: error.message }, 403);
+	if (error instanceof FileError) return c.json({ error: error.message }, 400);
 	if (error instanceof GitHubError || error instanceof SsoError || error instanceof SkillError) return c.json({ error: error.message }, 400);
 	if (error instanceof NotFoundError) return c.json({ error: error.message }, 404);
 	console.error(error);
@@ -320,12 +322,27 @@ api.get("/projects/:id/messages", async (c) => {
 	return c.json({ messages: await bridgeFor(project).messages(), running: bridgeFor(project).running });
 });
 
+/** JSON `{ message }`, or multipart with a `message` field and `files` (chat attachments). */
 api.post("/projects/:id/prompt", async (c) => {
 	const { project } = await projectFor(c, "editor");
-	const body = await c.req.json<{ message: string }>();
-	if (!body.message?.trim()) return c.json({ error: "Message is empty" }, 400);
+	let message = "";
+	const files: Attachment[] = [];
+	if ((c.req.header("Content-Type") ?? "").startsWith("multipart/form-data")) {
+		const form = await c.req.parseBody({ all: true });
+		message = String(form.message ?? "");
+		for (const entry of [form.files ?? []].flat()) {
+			if (entry instanceof File) files.push({ name: entry.name, type: entry.type, data: Buffer.from(await entry.arrayBuffer()) });
+		}
+	} else {
+		message = String((await c.req.json<{ message?: string }>()).message ?? "");
+	}
+	message = message.trim();
+	if (!message && files.length === 0) return c.json({ error: "Message is empty" }, 400);
+	checkAttachments(files);
 	await assertBudget(c.get("user").id);
-	return c.json(await bridgeFor(project).prompt(body.message.trim(), c.get("user").id));
+	const paths = await saveAttachments(project, files);
+	const result = await bridgeFor(project).prompt(promptWithAttachments(message, paths), c.get("user").id, modelImages(files));
+	return c.json({ ...(result as object), attachments: paths });
 });
 
 api.post("/projects/:id/abort", async (c) => {

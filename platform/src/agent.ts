@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import type { ImageContent } from "./attachments.ts";
 import { config } from "./config.ts";
 import { execIn, spawnDocker } from "./docker.ts";
 import { autoPush } from "./github.ts";
@@ -166,7 +167,7 @@ export class AgentBridge {
 		});
 	}
 
-	async prompt(message: string, userId: string): Promise<unknown> {
+	async prompt(message: string, userId: string, images: ImageContent[] = []): Promise<unknown> {
 		this.promptedBy = userId;
 		// pi reads skills when it starts, so an idle pi restarts (keeping its session) when the
 		// member prompting it has different skills. A follow-up while it works uses the loaded set.
@@ -177,6 +178,7 @@ export class AgentBridge {
 		return this.request({
 			type: "prompt",
 			message,
+			...(images.length ? { images } : {}),
 			...(this.running ? { streamingBehavior: "followUp" } : {}),
 		});
 	}

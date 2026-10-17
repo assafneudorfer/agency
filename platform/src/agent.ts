@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import type { ImageContent } from "./attachments.ts";
+import { bedrockAgentEnv } from "./bedrock.ts";
 import { config } from "./config.ts";
 import { execIn, spawnDocker } from "./docker.ts";
 import { autoPush } from "./github.ts";
@@ -74,6 +75,7 @@ export class AgentBridge {
 			const value = process.env[name];
 			if (value) env.push("-e", `${name}=${value}`);
 		}
+		for (const [name, value] of Object.entries(bedrockAgentEnv(this.project.id))) env.push("-e", `${name}=${value}`);
 		const piArgs = [
 			"pi",
 			"--mode",

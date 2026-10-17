@@ -1,0 +1,14 @@
+# All-AWS setup, DNS: Traefik proves the domain to Let's Encrypt through Route 53.
+# infra/aws adds this file through COMPOSE_FILE in .env.
+#
+# No stored keys: the host assumes a Route 53-only IAM role and refreshes its short-lived
+# credentials under /var/lib/agency/aws/dns (infra/aws/host/agency-aws-credentials).
+services:
+  traefik:
+    environment:
+      AWS_REGION: ${AGENCY_AWS_REGION:-us-east-1}
+      AWS_HOSTED_ZONE_ID: ${AGENCY_ROUTE53_ZONE_ID:?set AGENCY_ROUTE53_ZONE_ID in .env}
+      AWS_CONFIG_FILE: /aws/config
+      AWS_PROFILE: agency
+    volumes:
+      - /var/lib/agency/aws/dns:/aws:ro

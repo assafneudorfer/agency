@@ -1,0 +1,12 @@
+# All-AWS setup, model: the coding agent uses Claude on Amazon Bedrock instead of a Claude API key.
+# infra/aws adds this file through COMPOSE_FILE in .env.
+#
+# No stored keys: the host assumes a Bedrock-only IAM role and refreshes its short-lived credentials
+# under /var/lib/agency/aws/bedrock; the platform hands them to pi on request (platform/src/bedrock.ts).
+services:
+  platform:
+    environment:
+      AGENCY_AWS_CREDENTIALS_FILE: /aws/credentials.json
+      AGENCY_AWS_REGION: ${AGENCY_AWS_REGION:-us-east-1}
+    volumes:
+      - /var/lib/agency/aws/bedrock:/aws:ro

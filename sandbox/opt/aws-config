@@ -1,0 +1,4 @@
+# AWS profile for pi when Agency runs all on AWS (Amazon Bedrock). The platform sets AWS_PROFILE and
+# AWS_CONFIG_FILE on pi only; there are no stored keys in the sandbox.
+[profile agency]
+credential_process = /opt/agency/aws-credentials

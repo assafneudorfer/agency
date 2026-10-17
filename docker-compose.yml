@@ -1,5 +1,6 @@
 # Agency: self-hosted AI app builder on top of pi.
-# Production: TLS with a Let's Encrypt wildcard certificate via Cloudflare DNS.
+# Production: TLS with a Let's Encrypt wildcard certificate via Cloudflare DNS, or via Route 53 when
+# .env adds docker-compose.route53.yml through COMPOSE_FILE (the all-AWS setup).
 # Local: docker compose -f docker-compose.yml -f docker-compose.local.yml up
 name: agency
 
@@ -19,7 +20,7 @@ services:
       - --entrypoints.app.http.tls.domains[0].sans=*.${AGENCY_BASE_DOMAIN}
       - --certificatesresolvers.cf.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.cf.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.cf.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.cf.acme.dnschallenge.provider=${AGENCY_DNS_PROVIDER:-cloudflare}
     environment:
       CF_DNS_API_TOKEN: ${CLOUDFLARE_DNS_API_TOKEN:-}
     ports:

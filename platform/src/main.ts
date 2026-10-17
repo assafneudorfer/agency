@@ -8,6 +8,7 @@ import { type AgentEvent, bridgeFor, dropBridge } from "./agent.ts";
 import { type Attachment, checkAttachments, modelImages, promptWithAttachments, saveAttachments } from "./attachments.ts";
 import { AccessError, assertRole, atLeast, getSharing, type ProjectRole, projectRole, setMember, setTeamAccess, visibleProjects } from "./access.ts";
 import { closeDataPools, DataError, deleteRow, insertRow, listTables, readRows, runSql, updateRow } from "./appdata.ts";
+import { bedrockApp } from "./bedrock.ts";
 import {
 	type AppEnv,
 	createUser,
@@ -136,6 +137,7 @@ app.get("/healthz", (c) => c.text("ok"));
 app.get("/auth/verify", (c) => verifyForwardAuth(c));
 app.route("/gateway", gateway);
 app.route("/mcp", mcpApp);
+app.route("/internal", bedrockApp);
 
 // Providers send the admin back here after they approve a connection's access.
 app.get("/oauth/callback", async (c) => {

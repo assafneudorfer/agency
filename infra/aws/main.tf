@@ -13,6 +13,17 @@ data "aws_vpc" "default" {
 
 data "aws_caller_identity" "current" {}
 
+locals {
+  route53 = var.dns_provider == "route53"
+  bedrock = var.llm_provider == "bedrock"
+  # Compose overrides for the all-AWS pieces (see docker-compose.route53.yml and docker-compose.bedrock.yml).
+  compose_files = join(":", concat(
+    ["docker-compose.yml"],
+    local.route53 ? ["docker-compose.route53.yml"] : [],
+    local.bedrock ? ["docker-compose.bedrock.yml"] : [],
+  ))
+}
+
 # Nightly database dumps from the server. Private, encrypted, and deleted after backup_retention_days.
 resource "aws_s3_bucket" "backups" {
   bucket = "${var.name}-backups-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
@@ -64,10 +75,10 @@ resource "aws_ssm_parameter" "env" {
   name = "/${var.name}/env"
   type = "SecureString"
   tier = "Advanced"
-  value = join("\n", [
+  value = join("\n", concat([
+    "COMPOSE_FILE=${local.compose_files}",
     "AGENCY_BASE_DOMAIN=${var.base_domain}",
     "ACME_EMAIL=${var.acme_email}",
-    "CLOUDFLARE_DNS_API_TOKEN=${var.cloudflare_dns_api_token}",
     "AGENCY_SECRET_KEY=${random_password.secret_key.result}",
     "POSTGRES_PASSWORD=${random_password.postgres.result}",
     "AGENCY_ADMIN_EMAIL=${var.admin_email}",
@@ -79,7 +90,14 @@ resource "aws_ssm_parameter" "env" {
     "AGENCY_SANDBOX_CPUS=${var.sandbox_cpus}",
     "AGENCY_BACKUP_BUCKET=${aws_s3_bucket.backups.bucket}",
     "AGENCY_AWS_REGION=${var.aws_region}",
-  ])
+    ],
+    local.route53 ? [
+      "AGENCY_DNS_PROVIDER=route53",
+      "AGENCY_ROUTE53_ZONE_ID=${var.route53_zone_id}",
+      "AGENCY_DNS_ROLE_ARN=${aws_iam_role.dns[0].arn}",
+    ] : ["CLOUDFLARE_DNS_API_TOKEN=${var.cloudflare_dns_api_token}"],
+    local.bedrock ? ["AGENCY_BEDROCK_ROLE_ARN=${aws_iam_role.bedrock[0].arn}"] : [],
+  ))
 }
 
 resource "aws_iam_role" "instance" {
@@ -114,6 +132,76 @@ resource "aws_iam_role_policy" "backups" {
       { Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject"], Resource = "${aws_s3_bucket.backups.arn}/*" },
       { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.backups.arn },
     ]
+  })
+}
+
+# All-AWS setup: two narrow roles the host assumes and refreshes (infra/aws/host/agency-aws-credentials),
+# so Traefik can only touch DNS records and the coding agent can only call Claude on Bedrock.
+resource "aws_iam_role" "dns" {
+  count = local.route53 ? 1 : 0
+  name  = "${var.name}-dns"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.instance.arn }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy" "dns" {
+  count = local.route53 ? 1 : 0
+  name  = "route53-certificates"
+  role  = aws_iam_role.dns[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets"]
+        Resource = "arn:aws:route53:::hostedzone/${var.route53_zone_id}"
+      },
+      { Effect = "Allow", Action = ["route53:GetChange"], Resource = "arn:aws:route53:::change/*" },
+      { Effect = "Allow", Action = ["route53:ListHostedZonesByName"], Resource = "*" },
+    ]
+  })
+}
+
+resource "aws_iam_role" "bedrock" {
+  count = local.bedrock ? 1 : 0
+  name  = "${var.name}-bedrock"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.instance.arn }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy" "bedrock" {
+  count = local.bedrock ? 1 : 0
+  name  = "invoke-claude"
+  role  = aws_iam_role.bedrock[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+      # Cross-region inference profiles (us., eu., global.) route to the model in other regions.
+      Resource = [
+        "arn:aws:bedrock:*::foundation-model/anthropic.*",
+        "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*",
+      ]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "assume_runtime_roles" {
+  count = local.route53 || local.bedrock ? 1 : 0
+  name  = "assume-runtime-roles"
+  role  = aws_iam_role.instance.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "sts:AssumeRole"
+      Resource = concat(aws_iam_role.dns[*].arn, aws_iam_role.bedrock[*].arn)
+    }]
   })
 }
 
@@ -203,6 +291,7 @@ resource "aws_eip" "agency" {
 }
 
 resource "cloudflare_dns_record" "platform" {
+  count   = local.route53 ? 0 : 1
   zone_id = var.cloudflare_zone_id
   name    = var.base_domain
   type    = "A"
@@ -212,10 +301,40 @@ resource "cloudflare_dns_record" "platform" {
 }
 
 resource "cloudflare_dns_record" "apps" {
+  count   = local.route53 ? 0 : 1
   zone_id = var.cloudflare_zone_id
   name    = "*.${var.base_domain}"
   type    = "A"
   content = aws_eip.agency.public_ip
   proxied = var.cloudflare_proxied
   ttl     = 1
+}
+
+# Deployments made before Route 53 was an option keep their Cloudflare records in place.
+moved {
+  from = cloudflare_dns_record.platform
+  to   = cloudflare_dns_record.platform[0]
+}
+
+moved {
+  from = cloudflare_dns_record.apps
+  to   = cloudflare_dns_record.apps[0]
+}
+
+resource "aws_route53_record" "platform" {
+  count   = local.route53 ? 1 : 0
+  zone_id = var.route53_zone_id
+  name    = var.base_domain
+  type    = "A"
+  ttl     = 300
+  records = [aws_eip.agency.public_ip]
+}
+
+resource "aws_route53_record" "apps" {
+  count   = local.route53 ? 1 : 0
+  zone_id = var.route53_zone_id
+  name    = "*.${var.base_domain}"
+  type    = "A"
+  ttl     = 300
+  records = [aws_eip.agency.public_ip]
 }

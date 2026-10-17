@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Deploys Agency to AWS with Cloudflare DNS.
+# Deploys Agency to AWS. The first run asks how to set it up:
+#   1. Cloudflare DNS + a Claude API key (keys you paste in, stored encrypted in AWS SSM)
+#   2. All on AWS: Route 53 DNS + Claude on Amazon Bedrock (no keys at all; the server's IAM role)
 #
 #   ./deploy.sh            create or update the stack (asks for anything it needs)
 #   ./deploy.sh update     pull the latest code on the server and rebuild
+#   ./deploy.sh use-aws    move a Cloudflare + Claude API key deployment to all on AWS
 #   ./deploy.sh stop       stop the server to save money (data, address and DNS stay)
 #   ./deploy.sh start      start it again; the stack comes back on its own
 #   ./deploy.sh status     show whether the server is running
 #   ./deploy.sh backup     back up all databases now (also runs every night on the server)
 #   ./deploy.sh destroy    delete everything this script created
 #
-# Secrets (Claude API key, Cloudflare token, admin password) are read from the environment or
+# Secrets (Claude API key, Cloudflare token, admin password; on all-AWS only the password) are read from the environment or
 # typed at a hidden prompt. They are never written to files by this script, never passed on a
 # command line, and only reach AWS as an encrypted SSM SecureString. Terraform state does hold
 # them (and the generated database password), so terraform.tfstate is kept private (mode 600).
@@ -53,6 +56,31 @@ request_with_header() {
 	printf '%s\n' "$header" | curl -sS -H @- "$url"
 }
 
+# Reads a value from the settings file, or prints the default.
+setting() {
+	local value=""
+	[ -f "$SETTINGS" ] && value=$(grep -E "^$1 " "$SETTINGS" | cut -d'"' -f2 || true)
+	printf '%s' "${value:-${2:-}}"
+}
+
+# Picks the setup: from the settings file, else asks. Sets DNS_PROVIDER and LLM_PROVIDER.
+choose_mode() {
+	if [ -f "$SETTINGS" ]; then
+		DNS_PROVIDER=$(setting dns_provider cloudflare)
+		LLM_PROVIDER=$(setting llm_provider anthropic)
+		return
+	fi
+	echo "How should Agency run?"
+	echo "  1) Cloudflare DNS + Claude API key (you paste a Cloudflare token and an Anthropic key)"
+	echo "  2) All on AWS: Route 53 DNS + Claude on Amazon Bedrock (no keys; uses the server's IAM role)"
+	ask MODE "Choose 1 or 2" "1"
+	case "$MODE" in
+	1) DNS_PROVIDER=cloudflare LLM_PROVIDER=anthropic ;;
+	2) DNS_PROVIDER=route53 LLM_PROVIDER=bedrock ;;
+	*) fail "Choose 1 or 2" ;;
+	esac
+}
+
 check_aws() {
 	info "Checking AWS credentials"
 	local identity
@@ -61,15 +89,84 @@ check_aws() {
 	echo "    Account and identity: $identity"
 }
 
+# True while Terraform still manages Cloudflare records, for example on a server moving to Route 53.
+has_cloudflare_records() {
+	[ -f terraform.tfstate ] && grep -q '"type": "cloudflare_dns_record"' terraform.tfstate
+}
+
 tf_secret_vars() {
-	ask ANTHROPIC_API_KEY "Claude API key (sk-ant-...)" "" secret
-	ask CLOUDFLARE_API_TOKEN "Cloudflare API token (Zone > DNS > Edit)" "" secret
+	if [ "$LLM_PROVIDER" = "anthropic" ]; then
+		ask ANTHROPIC_API_KEY "Claude API key (sk-ant-...)" "" secret
+		export TF_VAR_anthropic_api_key=$ANTHROPIC_API_KEY
+	fi
+	if [ "$DNS_PROVIDER" = "cloudflare" ] || has_cloudflare_records; then
+		[ "$DNS_PROVIDER" = "cloudflare" ] || [ -n "${CLOUDFLARE_API_TOKEN:-}" ] ||
+			info "Cloudflare token needed once more, to remove the old Cloudflare records"
+		ask CLOUDFLARE_API_TOKEN "Cloudflare API token (Zone > DNS > Edit)" "" secret
+		export CLOUDFLARE_API_TOKEN
+		export TF_VAR_cloudflare_dns_api_token=$CLOUDFLARE_API_TOKEN
+	fi
 	ask ADMIN_PASSWORD "Admin password for the Agency sign-in (10+ characters)" "" secret
 	[ ${#ADMIN_PASSWORD} -ge 10 ] || fail "The admin password must be at least 10 characters"
-	export CLOUDFLARE_API_TOKEN
-	export TF_VAR_cloudflare_dns_api_token=$CLOUDFLARE_API_TOKEN
-	export TF_VAR_anthropic_api_key=$ANTHROPIC_API_KEY
 	export TF_VAR_admin_password=$ADMIN_PASSWORD
+}
+
+# Prints the Cloudflare zone id for $1 (or a parent domain), or fails.
+find_cloudflare_zone() {
+	local zone_id="" candidate=$1 response
+	while [ -z "$zone_id" ] && [[ $candidate == *.* ]]; do
+		response=$(request_with_header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+			"https://api.cloudflare.com/client/v4/zones?name=$candidate")
+		zone_id=$(printf '%s' "$response" | grep -o '"id":"[0-9a-f]\{32\}"' | head -1 | cut -d'"' -f4 || true)
+		[ -n "$zone_id" ] || candidate=${candidate#*.}
+	done
+	[ -n "$zone_id" ] || fail "No Cloudflare zone found for $1 that this token can see"
+	echo "    Zone $candidate ($zone_id)" >&2
+	printf '%s' "$zone_id"
+}
+
+# Prints the id of the public Route 53 hosted zone for $1 (or a parent domain), or nothing.
+find_route53_zone() {
+	local candidate=$1 found
+	while [[ $candidate == *.* ]]; do
+		found=$(aws route53 list-hosted-zones-by-name --dns-name "$candidate" --max-items 1 \
+			--query "HostedZones[?Name=='$candidate.' && !Config.PrivateZone].Id | [0]" --output text)
+		if [ -n "$found" ] && [ "$found" != "None" ]; then
+			echo "    Hosted zone $candidate (${found##*/})" >&2
+			printf '%s' "${found##*/}"
+			return
+		fi
+		candidate=${candidate#*.}
+	done
+}
+
+# Finds or creates the Route 53 hosted zone for $1 and prints its id.
+route53_zone() {
+	local zone_id zone_name
+	zone_id=$(find_route53_zone "$1")
+	if [ -n "$zone_id" ]; then
+		printf '%s' "$zone_id"
+		return
+	fi
+	echo "    No Route 53 hosted zone found for $1." >&2
+	# Default: the registered domain, for example example.com for agency.example.com.
+	ask ZONE_NAME "Domain to create a Route 53 hosted zone for" "$(printf '%s' "$1" | awk -F. '{print $(NF-1)"."$NF}')" >&2
+	zone_name=$ZONE_NAME
+	info "Creating a Route 53 hosted zone for $zone_name (about \$0.50 a month)" >&2
+	zone_id=$(aws route53 create-hosted-zone --name "$zone_name" --caller-reference "agency-$(date +%s)" \
+		--query HostedZone.Id --output text)
+	printf '%s' "${zone_id##*/}"
+}
+
+# Default Bedrock model for a region: the cross-region inference profile that serves it.
+bedrock_default_model() {
+	local prefix=global
+	case "$1" in
+	us-*) prefix=us ;;
+	eu-*) prefix=eu ;;
+	ap-southeast-2 | ap-southeast-4) prefix=au ;;
+	esac
+	printf 'amazon-bedrock/%s.anthropic.claude-opus-4-8' "$prefix"
 }
 
 write_settings() {
@@ -84,16 +181,18 @@ write_settings() {
 	ask SIZE "Instance size: small (t3.medium, for testing) or standard (t3.xlarge)" "small"
 	ask REPO_REF "Git branch to deploy" "main"
 
-	info "Looking up the Cloudflare zone for $BASE_DOMAIN"
-	local zone_id="" candidate=$BASE_DOMAIN response
-	while [ -z "$zone_id" ] && [[ $candidate == *.* ]]; do
-		response=$(request_with_header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-			"https://api.cloudflare.com/client/v4/zones?name=$candidate")
-		zone_id=$(printf '%s' "$response" | grep -o '"id":"[0-9a-f]\{32\}"' | head -1 | cut -d'"' -f4 || true)
-		[ -n "$zone_id" ] || candidate=${candidate#*.}
-	done
-	[ -n "$zone_id" ] || fail "No Cloudflare zone found for $BASE_DOMAIN that this token can see"
-	echo "    Zone $candidate ($zone_id)"
+	local dns_settings model=""
+	if [ "$DNS_PROVIDER" = "route53" ]; then
+		info "Looking up the Route 53 hosted zone for $BASE_DOMAIN"
+		dns_settings="route53_zone_id    = \"$(route53_zone "$BASE_DOMAIN")\""
+	else
+		info "Looking up the Cloudflare zone for $BASE_DOMAIN"
+		dns_settings="cloudflare_zone_id = \"$(find_cloudflare_zone "$BASE_DOMAIN")\""
+	fi
+	if [ "$LLM_PROVIDER" = "bedrock" ]; then
+		ask MODEL "Claude model on Bedrock" "$(bedrock_default_model "$AWS_REGION_CHOICE")"
+		model=$MODEL
+	fi
 
 	local instance_type=t3.medium sandbox_memory=1500m sandbox_cpus=1 volume=40
 	if [ "$SIZE" = "standard" ]; then
@@ -102,7 +201,10 @@ write_settings() {
 	cat >"$SETTINGS" <<EOF
 aws_region         = "$AWS_REGION_CHOICE"
 base_domain        = "$BASE_DOMAIN"
-cloudflare_zone_id = "$zone_id"
+dns_provider       = "$DNS_PROVIDER"
+llm_provider       = "$LLM_PROVIDER"
+$dns_settings
+agency_model       = "$model"
 acme_email         = "$ADMIN_EMAIL"
 admin_email        = "$ADMIN_EMAIL"
 repo_ref           = "$REPO_REF"
@@ -114,12 +216,72 @@ EOF
 }
 
 verify_keys() {
+	if [ "$LLM_PROVIDER" = "bedrock" ]; then
+		verify_bedrock
+	else
+		verify_claude_key
+	fi
+	if [ "$DNS_PROVIDER" = "cloudflare" ]; then
+		verify_cloudflare_token
+	elif ! has_cloudflare_records; then
+		# A new server: its certificate needs Route 53 to answer for the domain from the start.
+		# A server moving over keeps its certificate, so it only gets the reminder after the switch.
+		verify_delegation wait
+	fi
+}
+
+# One tiny request with your own AWS sign-in. The first call to a Claude model also turns on the
+# model for the account, which the server's role is not allowed to do.
+verify_bedrock() {
+	local model region output
+	model=$(setting agency_model)
+	model=${model#amazon-bedrock/}
+	region=$(region)
+	info "Checking Claude on Bedrock ($model in $region)"
+	if ! output=$(aws bedrock-runtime converse --region "$region" --model-id "$model" \
+		--messages '[{"role":"user","content":[{"text":"Say ok"}]}]' --inference-config maxTokens=5 \
+		--query 'output.message.content[0].text' --output text 2>&1); then
+		echo "$output" >&2
+		fail "Bedrock refused the request. In the AWS console open Amazon Bedrock > Model catalog, pick the Claude model in $region, and submit Anthropic's one-time use case form if it asks; then run ./deploy.sh again. To pick another model, change agency_model in $SETTINGS."
+	fi
+}
+
+verify_claude_key() {
 	info "Checking the Claude API key"
 	local status
 	status=$(printf 'x-api-key: %s\n' "$ANTHROPIC_API_KEY" |
 		curl -sS -o /dev/null -w '%{http_code}' -H @- -H 'anthropic-version: 2023-06-01' https://api.anthropic.com/v1/models)
 	[ "$status" = "200" ] || fail "The Claude API rejected the key (HTTP $status)"
+}
 
+# Let's Encrypt only sees Route 53 once the registrar points the domain at it. With "wait", waits for
+# that; otherwise only says what to change.
+verify_delegation() {
+	local mode=${1:-remind} zone_id zone servers
+	zone_id=$(setting route53_zone_id)
+	zone=$(aws route53 get-hosted-zone --id "$zone_id" --query HostedZone.Name --output text)
+	zone=${zone%.}
+	servers=$(aws route53 get-hosted-zone --id "$zone_id" --query 'DelegationSet.NameServers' --output text | tr '\t' '\n')
+	info "Checking that $zone is served by Route 53"
+	for attempt in $(seq 1 120); do
+		if curl -fsS "https://dns.google/resolve?name=$zone&type=NS" | grep -qiF "$(printf '%s' "$servers" | head -1)"; then
+			echo "    Delegated to Route 53"
+			return
+		fi
+		if [ "$attempt" = 1 ]; then
+			echo "    $zone does not point at Route 53 yet. At your domain registrar, set its name servers to:"
+			printf '%s\n' "$servers" | sed 's/^/      /'
+			echo "    (If the domain already has DNS records elsewhere, such as email, copy them into the hosted zone first.)"
+			[ "$mode" = "wait" ] || return 0
+			echo "    Waiting for the change to show up; this can take from minutes to a few hours. Ctrl+C stops, and"
+			echo "    ./deploy.sh picks up from here when you run it again."
+		fi
+		sleep 30
+	done
+	fail "$zone still does not point at Route 53. Run ./deploy.sh again once the registrar change is live."
+}
+
+verify_cloudflare_token() {
 	info "Checking the Cloudflare token"
 	request_with_header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
 		"https://api.cloudflare.com/client/v4/user/tokens/verify" | grep -q '"status":"active"' ||
@@ -140,7 +302,7 @@ wait_until_up() {
 }
 
 region() {
-	grep -E '^aws_region' "$SETTINGS" | cut -d'"' -f2
+	setting aws_region
 }
 
 instance_state() {
@@ -148,9 +310,8 @@ instance_state() {
 		--query 'Reservations[0].Instances[0].State.Name' --output text
 }
 
-case "$ACTION" in
-deploy)
-	check_aws
+deploy() {
+	choose_mode
 	tf_secret_vars
 	write_settings
 	verify_keys
@@ -164,16 +325,63 @@ deploy)
 	rm -f agency.tfplan
 	chmod 600 terraform.tfstate* 2>/dev/null || true
 	wait_until_up "$(terraform output -raw url)"
-	echo "Sign in with $(grep -E '^admin_email' "$SETTINGS" | cut -d'"' -f2) and the admin password you typed."
-	;;
-update)
-	check_aws
+	echo "Sign in with $(setting admin_email) and the admin password you typed."
+}
+
+update() {
 	info "Running agency-deploy on the server"
 	aws ssm send-command --region "$(region)" --instance-ids "$(terraform output -raw instance_id)" \
 		--document-name AWS-RunShellScript \
 		--parameters 'commands=["/usr/local/bin/agency-deploy","/opt/agency-src/infra/aws/host/setup.sh"]' \
 		--query Command.CommandId --output text
 	echo "Started. Follow it in the AWS console under Systems Manager > Run Command."
+}
+
+# Moves a running Cloudflare + Claude API key deployment to Route 53 and Bedrock. Data, address and
+# certificate stay. Route 53 gets the records first, and the Cloudflare ones go only once the registrar
+# points the domain at Route 53, so the site stays reachable throughout. Safe to run again if stopped.
+use_aws() {
+	[ -f "$SETTINGS" ] || fail "Nothing deployed yet. Run ./deploy.sh and choose option 2."
+	if [ "$(setting dns_provider cloudflare)" = "cloudflare" ]; then
+		local base_domain zone_id
+		base_domain=$(setting base_domain)
+		info "Looking up the Route 53 hosted zone for $base_domain"
+		zone_id=$(route53_zone "$base_domain")
+		ask MODEL "Claude model on Bedrock" "$(bedrock_default_model "$(region)")"
+		sed -i.bak -E '/^(dns_provider|llm_provider|cloudflare_zone_id|route53_zone_id|agency_model) /d' "$SETTINGS"
+		rm -f "$SETTINGS.bak"
+		cat >>"$SETTINGS" <<EOF
+dns_provider       = "route53"
+llm_provider       = "bedrock"
+route53_zone_id    = "$zone_id"
+agency_model       = "$MODEL"
+EOF
+	elif ! has_cloudflare_records; then
+		fail "This deployment already runs all on AWS."
+	fi
+	choose_mode
+	tf_secret_vars
+	verify_bedrock
+	terraform init -input=false -upgrade >/dev/null
+	info "Adding the records to Route 53 (Cloudflare keeps serving them until the switch)"
+	terraform apply -target=aws_route53_record.platform -target=aws_route53_record.apps
+	verify_delegation wait
+	deploy
+	update
+}
+
+case "$ACTION" in
+deploy)
+	check_aws
+	deploy
+	;;
+update)
+	check_aws
+	update
+	;;
+use-aws)
+	check_aws
+	use_aws
 	;;
 stop)
 	check_aws
@@ -208,12 +416,13 @@ backup)
 	;;
 destroy)
 	check_aws
+	choose_mode
 	tf_secret_vars
 	read -rp "Delete the Agency server, its data, backups and DNS records? Type the domain to confirm: " confirm
-	[ "$confirm" = "$(grep -E '^base_domain' "$SETTINGS" | cut -d'"' -f2)" ] || fail "Cancelled"
+	[ "$confirm" = "$(setting base_domain)" ] || fail "Cancelled"
 	terraform destroy -input=false -auto-approve
 	;;
 *)
-	fail "Unknown command '$ACTION'. Use deploy, update, stop, start, status, backup or destroy."
+	fail "Unknown command '$ACTION'. Use deploy, update, use-aws, stop, start, status, backup or destroy."
 	;;
 esac

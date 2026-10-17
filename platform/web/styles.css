@@ -2429,3 +2429,15 @@ code {
 .card-foot .link-btn:first-child {
 	margin-right: auto;
 }
+
+.stack-sm {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.rule {
+	height: 1px;
+	background: var(--border);
+	margin: 16px 0;
+}

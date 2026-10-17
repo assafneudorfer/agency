@@ -2330,7 +2330,30 @@ function SsoSettings({ sso, publicUrl, onSaved }) {
 	</form>`;
 }
 
-function GitHubSettings({ github, onSaved }) {
+/** Whether every new app gets its own repository. Shown once GitHub is connected. */
+function NewAppsToggle({ defaults }) {
+	const [value, setValue] = useState(defaults);
+	const save = async (patch) => {
+		const next = { ...value, ...patch };
+		setValue(next);
+		try {
+			setValue(await api("/settings/github/new-apps", { method: "PUT", body: next }));
+		} catch (err) {
+			setValue(value);
+			toast(err.message, "error");
+		}
+	};
+	return html`<div class="stack-sm">
+		<label class="check"
+			><input type="checkbox" checked=${value.createRepo} onChange=${(e) => save({ createRepo: e.target.checked })} /> Create a repository for every new app and
+			push each version</label
+		>
+		${value.createRepo &&
+		html`<label class="check"><input type="checkbox" checked=${value.private} onChange=${(e) => save({ private: e.target.checked })} /> Make new repositories private</label>`}
+	</div>`;
+}
+
+function GitHubSettings({ github, newApps, onSaved }) {
 	const [form, setForm] = useState(() => ({
 		apiUrl: github?.apiUrl ?? "https://api.github.com",
 		webUrl: github?.webUrl ?? "https://github.com",
@@ -2390,7 +2413,9 @@ function GitHubSettings({ github, onSaved }) {
 					? html`<p class="muted">
 							Pushes as <span class="mono">${github.account}</span> with tokens that last an hour. Choose which repositories it can use in the${" "}
 							<a href=${github.installationUrl} target="_blank" rel="noopener">installation settings</a>.
-						</p>`
+						</p>
+						<div class="rule"></div>
+						<${NewAppsToggle} defaults=${newApps} />`
 					: html`<p class="muted">The app <span class="mono">${github.account.replace("[bot]", "")}</span> was created in ${github.owner}. Install it on the organization to finish.</p>`}
 			</div>
 			<div class="card-foot">
@@ -2421,6 +2446,7 @@ function GitHubSettings({ github, onSaved }) {
 					<span>API URL <span class="hint">change only for GitHub Enterprise Server</span></span>
 					<input class="input mono" value=${form.apiUrl} onInput=${set("apiUrl")} />
 				</label>
+				${connected && html`<div class="wide"><${NewAppsToggle} defaults=${newApps} /></div>`}
 				${error && html`<div class="error wide">${error}</div>`}
 			</div>
 			<div class="card-foot">
@@ -2479,7 +2505,7 @@ function Settings() {
 			? html`<div class="empty"><span class="spinner"></span></div>`
 			: html`<div class="stack">
 					<${SsoSettings} sso=${data.sso} publicUrl=${data.publicUrl} onSaved=${load} />
-					<${GitHubSettings} github=${data.github} onSaved=${load} />
+					<${GitHubSettings} github=${data.github} newApps=${data.githubNewApps} onSaved=${load} />
 				</div>`}
 	</div>`;
 }

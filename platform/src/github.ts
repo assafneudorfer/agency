@@ -369,6 +369,64 @@ export async function pushToGitHub(project: Project, options: { force?: boolean 
 	}
 }
 
+// ---------------------------------------------------------------------------
+// New apps: each gets a private repository and pushes every version, unless an admin turns it off.
+
+const NEW_APPS_KEY = "github_new_apps";
+
+export interface NewAppsDefaults {
+	/** Create a repository for every new app and push each version automatically. */
+	createRepo: boolean;
+	private: boolean;
+}
+
+export async function newAppsDefaults(): Promise<NewAppsDefaults> {
+	return { createRepo: true, private: true, ...(await getSetting<Partial<NewAppsDefaults>>(NEW_APPS_KEY)) };
+}
+
+export async function saveNewAppsDefaults(input: Partial<NewAppsDefaults>): Promise<NewAppsDefaults> {
+	const next = { createRepo: input.createRepo !== false, private: input.private !== false };
+	await putSetting(NEW_APPS_KEY, next);
+	return next;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Right after an app is created: links it to a new repository named after it (adding -2, -3, ... when the
+ * organization already has one by that name) and pushes its first version once the sandbox has committed it.
+ */
+export function linkNewApp(projectId: string): void {
+	void (async () => {
+		const defaults = await newAppsDefaults();
+		if (!defaults.createRepo || !(await getGitHub())) return;
+		let project = await getProject(projectId);
+		if (!project || project.github_repo) return;
+		for (let attempt = 1; ; attempt++) {
+			const repo = attempt === 1 ? project.slug : `${project.slug}-${attempt}`;
+			try {
+				await linkRepository(project, { create: true, repo, private: defaults.private, autoPush: true });
+				break;
+			} catch (error) {
+				if (attempt >= 5 || !/already exists/i.test(error instanceof Error ? error.message : "")) throw error;
+			}
+		}
+		// The sandbox commits the template when it first starts; wait for that commit.
+		for (let attempt = 1; ; attempt++) {
+			project = await getProject(projectId);
+			// Unlinked meanwhile, or an automatic push after the agent's first turn already got there.
+			if (!project?.github_repo || project.github_pushed_commit) return;
+			try {
+				await pushToGitHub(project);
+				return;
+			} catch (error) {
+				if (attempt >= 10) throw error;
+				await sleep(3000);
+			}
+		}
+	})().catch((error) => console.error(`[github ${projectId}] couldn't set up the new app's repository: ${error instanceof Error ? error.message : error}`));
+}
+
 /** After a new version (agent turn, code save, restore): pushes it when the app has automatic pushes on. */
 export function autoPush(projectId: string): void {
 	void (async () => {

@@ -195,6 +195,8 @@ const ICONS = {
 	github: '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65S8.93 17.38 9 18v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>',
 	key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
 	settings: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+	more: '<circle cx="5" cy="12" r="1.25"/><circle cx="12" cy="12" r="1.25"/><circle cx="19" cy="12" r="1.25"/>',
+	message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
 	infinity: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4z"/>',
 };
 
@@ -290,10 +292,12 @@ function Toaster() {
 }
 
 // ---------------------------------------------------------------------------
-// Sheet: a panel that slides over the right side of the builder stage.
+// Sheet: a panel that slides over the right side of the builder stage, or up from the bottom on a phone.
 
 function Sheet({ open, title, onClose, children }) {
 	const [mounted, setMounted] = useState(open);
+	const panel = useRef(null);
+	const drag = useRef(null);
 	useEffect(() => {
 		if (open) setMounted(true);
 	}, [open]);
@@ -304,18 +308,61 @@ function Sheet({ open, title, onClose, children }) {
 		return () => removeEventListener("keydown", onKey);
 	}, [open]);
 	if (!mounted) return null;
-	return html`<aside
-		class="sheet"
-		data-state=${open ? "open" : "closed"}
-		aria-hidden=${!open}
-		onTransitionEnd=${(e) => !open && e.target === e.currentTarget && setMounted(false)}
-	>
-		<div class="sheet-head">
-			<h3>${title}</h3>
-			<button class="icon-btn" title="Close" onClick=${onClose}>${icon("x")}</button>
-		</div>
-		${children}
-	</aside>`;
+	// On phones the sheet rises from the bottom and its header is a drag handle. A quick flick
+	// dismisses it even when it moved only a little; dragging up past the top meets friction.
+	const onPointerDown = (e) => {
+		if (drag.current || e.button !== 0 || e.target.closest("button") || !matchMedia(PHONE).matches) return;
+		e.currentTarget.setPointerCapture(e.pointerId);
+		drag.current = { id: e.pointerId, y: e.clientY, t: performance.now(), dy: 0 };
+		panel.current.style.transition = "none";
+	};
+	const onPointerMove = (e) => {
+		const d = drag.current;
+		if (!d || e.pointerId !== d.id) return;
+		const raw = e.clientY - d.y;
+		d.dy = raw > 0 ? raw : -Math.sqrt(-raw) * 2;
+		panel.current.style.transform = `translateY(${d.dy}px)`;
+	};
+	const onPointerUp = (e) => {
+		const d = drag.current;
+		if (!d || e.pointerId !== d.id) return;
+		drag.current = null;
+		const velocity = d.dy / (performance.now() - d.t);
+		panel.current.style.transition = "";
+		panel.current.style.transform = "";
+		if (d.dy > 120 || (d.dy > 10 && velocity > 0.11)) onClose();
+	};
+	return html`<div class="sheet-backdrop" data-state=${open ? "open" : "closed"} onClick=${onClose}></div>
+		<aside
+			ref=${panel}
+			class="sheet"
+			role="dialog"
+			aria-label=${title}
+			data-state=${open ? "open" : "closed"}
+			aria-hidden=${!open}
+			onTransitionEnd=${(e) => !open && e.target === e.currentTarget && setMounted(false)}
+		>
+			<div class="sheet-head" onPointerDown=${onPointerDown} onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${onPointerUp}>
+				<span class="grabber" aria-hidden="true"></span>
+				<h3>${title}</h3>
+				<button class="icon-btn" title="Close" onClick=${onClose}>${icon("x")}</button>
+			</div>
+			${children}
+		</aside>`;
+}
+
+// Matches the CSS breakpoint where the layout switches to the phone version.
+const PHONE = "(max-width: 760px)";
+
+function usePhone() {
+	const [phone, setPhone] = useState(() => matchMedia(PHONE).matches);
+	useEffect(() => {
+		const query = matchMedia(PHONE);
+		const onChange = () => setPhone(query.matches);
+		query.addEventListener("change", onChange);
+		return () => query.removeEventListener("change", onChange);
+	}, []);
+	return phone;
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +554,10 @@ function Builder({ id }) {
 	const [input, setInput] = useState("");
 	const [error, setError] = useState("");
 	const [panel, setPanel] = useState(null);
-	const [tab, setTab] = useState("preview");
+	const phone = usePhone();
+	// On a phone the chat is a tab of its own; on wider screens it sits beside the stage.
+	const [tab, setTab] = useState(() => (matchMedia(PHONE).matches ? "chat" : "preview"));
+	const [fresh, setFresh] = useState(false);
 	const [device, setDevice] = useState("desktop");
 	const [previewKey, setPreviewKey] = useState(0);
 	const [restored, setRestored] = useState(0);
@@ -528,6 +578,7 @@ function Builder({ id }) {
 				if (event.type === "agent_settled") {
 					setRunning(false);
 					setPreviewKey((k) => k + 1);
+					setFresh(true);
 				}
 				if (event.type === "agency_agent_exit") setRunning(false);
 				setItems((current) => applyEvent(current, event));
@@ -558,7 +609,11 @@ function Builder({ id }) {
 
 	useEffect(() => {
 		scroller.current?.scrollTo(0, scroller.current.scrollHeight);
-	}, [items]);
+	}, [items, tab]);
+
+	useEffect(() => {
+		if (tab === "preview") setFresh(false);
+	}, [tab]);
 
 	const send = async () => {
 		const message = input.trim();
@@ -579,6 +634,12 @@ function Builder({ id }) {
 
 	const host = project.previewUrl.replace(/^https?:\/\//, "");
 	const canEdit = project.role === "editor" || project.role === "owner";
+	const view = !phone && tab === "chat" ? "preview" : tab;
+	const tabButton = (name, label, iconName, className = "") =>
+		html`<button role="tab" class=${className} aria-selected=${(phone ? tab : view) === name} onClick=${() => setTab(name)}>
+			${icon(iconName)} <span>${label}</span>${name === "preview" && fresh && phone && tab !== "preview" && html`<span class="dot accent-dot" title="Updated"></span>`}
+		</button>`;
+	const openFromMenu = (name) => setPanel(name);
 	return html`<div class="builder">
 		<header class="topbar">
 			<div class="left">
@@ -591,28 +652,36 @@ function Builder({ id }) {
 						: null}
 			</div>
 			<div class="center">
-				<div class="seg" role="tablist" style=${`--index:${["preview", "code", "data"].indexOf(tab)};--count:3`}>
-					<button role="tab" aria-selected=${tab === "preview"} onClick=${() => setTab("preview")}>${icon("eye")} Preview</button>
-					<button role="tab" aria-selected=${tab === "code"} onClick=${() => setTab("code")}>${icon("code")} Code</button>
-					<button role="tab" aria-selected=${tab === "data"} onClick=${() => setTab("data")}>${icon("database")} Data</button>
+				<div
+					class="seg builder-tabs"
+					role="tablist"
+					style=${`--index-wide:${["preview", "code", "data"].indexOf(view)};--index-phone:${["chat", "preview", "code", "data"].indexOf(tab)}`}
+				>
+					${tabButton("chat", "Chat", "message", "only-phone")} ${tabButton("preview", "Preview", "eye")} ${tabButton("code", "Code", "code")}
+					${tabButton("data", "Data", "database")}
 				</div>
 			</div>
 			<div class="right">
-				<button class="icon-btn" title="Versions" aria-pressed=${panel === "versions"} onClick=${() => togglePanel("versions")}>
+				<button class="icon-btn hide-phone" title="Versions" aria-pressed=${panel === "versions"} onClick=${() => togglePanel("versions")}>
 					${icon("history")}
 				</button>
-				<button class="icon-btn" title="Dev server log" aria-pressed=${panel === "logs"} onClick=${() => togglePanel("logs")}>
+				<button class="icon-btn hide-phone" title="Dev server log" aria-pressed=${panel === "logs"} onClick=${() => togglePanel("logs")}>
 					${icon("terminal")}
 				</button>
-				<button class="icon-btn" title="GitHub" aria-pressed=${panel === "github"} onClick=${() => togglePanel("github")}>${icon("github")}</button>
-				<button class="icon-btn" title="Share" aria-pressed=${panel === "share"} onClick=${() => togglePanel("share")}>${icon("share")}</button>
-				<span class="sep"></span>
+				<button class="icon-btn hide-phone" title="GitHub" aria-pressed=${panel === "github"} onClick=${() => togglePanel("github")}>
+					${icon("github")}
+				</button>
+				<button class="icon-btn hide-phone" title="Share" aria-pressed=${panel === "share"} onClick=${() => togglePanel("share")}>
+					${icon("share")}
+				</button>
+				<span class="sep hide-phone"></span>
+				<button class="icon-btn only-phone" title="More" aria-pressed=${panel === "more"} onClick=${() => togglePanel("more")}>${icon("more")}</button>
 				${canEdit
 					? html`<button class="btn primary sm" onClick=${() => togglePanel("publish")}>${icon("globe")} Publish</button>`
 					: html`<span class="badge">${icon("eye")} View only</span>`}
 			</div>
 		</header>
-		<div class="workbench">
+		<div class="workbench" data-tab=${tab}>
 			<section class="chat">
 				<div class="messages" ref=${scroller}>
 					${items.length === 0 &&
@@ -628,6 +697,7 @@ function Builder({ id }) {
 					<div class="chat-box">
 						<textarea
 							placeholder=${running ? "Add an instruction for after this step..." : "Ask for a change..."}
+							enterkeyhint="send"
 							value=${input}
 							onInput=${(e) => setInput(e.target.value)}
 							onKeyDown=${(e) => {
@@ -638,7 +708,7 @@ function Builder({ id }) {
 							}}
 						></textarea>
 						<div class="bar">
-							<span class="faint grow" style="font-size:11.5px">Shift + Enter for a new line</span>
+							<span class="faint grow hint">Shift + Enter for a new line</span>
 							${running &&
 							html`<button class="btn sm" onClick=${() => api(`/projects/${id}/abort`, { method: "POST" })}>${icon("stop")} Stop</button>`}
 							<button class="btn primary send" title="Send" disabled=${!input.trim()} onClick=${send}>${icon("arrowUp")}</button>
@@ -650,19 +720,19 @@ function Builder({ id }) {
 						</div>`}
 			</section>
 			<section class="stage">
-				<div class="preview" hidden=${tab !== "preview"}>
+				<div class="preview" hidden=${view !== "preview"}>
 					<div class="chrome">
 						<button class="icon-btn" title="Reload preview" onClick=${() => setPreviewKey((k) => k + 1)}>${icon("refresh")}</button>
 						<div class="url">${project.previewUrl.startsWith("https") && icon("lock")}<span>${host}</span></div>
-						<button class="icon-btn" title="Desktop width" aria-pressed=${device === "desktop"} onClick=${() => setDevice("desktop")}>
+						<button class="icon-btn hide-phone" title="Desktop width" aria-pressed=${device === "desktop"} onClick=${() => setDevice("desktop")}>
 							${icon("monitor")}
 						</button>
-						<button class="icon-btn" title="Phone width" aria-pressed=${device === "mobile"} onClick=${() => setDevice("mobile")}>
+						<button class="icon-btn hide-phone" title="Phone width" aria-pressed=${device === "mobile"} onClick=${() => setDevice("mobile")}>
 							${icon("phone")}
 						</button>
 						<a class="icon-btn" href=${project.previewUrl} target="_blank" rel="noopener" title="Open in a new tab">${icon("external")}</a>
 					</div>
-					<div class=${`viewport ${device}`}>
+					<div class=${`viewport ${phone ? "desktop" : device}`}>
 						<iframe key=${previewKey} src=${project.previewUrl} title="App preview"></iframe>
 					</div>
 				</div>
@@ -670,35 +740,44 @@ function Builder({ id }) {
 					id=${id}
 					running=${running}
 					canEdit=${canEdit}
-					active=${tab === "code"}
+					active=${view === "code"}
 					restored=${restored}
 					onSaved=${() => setPreviewKey((k) => k + 1)}
 				/>
-				<${DataView} project=${project} running=${running} active=${tab === "data"} onChanged=${() => setPreviewKey((k) => k + 1)} />
-				<${Sheet} open=${panel === "versions"} title="Versions" onClose=${() => setPanel(null)}>
-					<${VersionsPanel}
-						id=${id}
-						running=${running}
-						canEdit=${canEdit}
-						onRestored=${() => {
-							setPreviewKey((k) => k + 1);
-							setRestored((n) => n + 1);
-						}}
-					/>
-				<//>
-				<${Sheet} open=${panel === "logs"} title="Dev server log" onClose=${() => setPanel(null)}>
-					<${LogsPanel} id=${id} />
-				<//>
-				<${Sheet} open=${panel === "github"} title="GitHub" onClose=${() => setPanel(null)}>
-					<${GitHubPanel} project=${project} running=${running} open=${panel === "github"} />
-				<//>
-				<${Sheet} open=${panel === "share"} title="Share" onClose=${() => setPanel(null)}>
-					<${SharePanel} project=${project} onChange=${loadProject} />
-				<//>
-				<${Sheet} open=${panel === "publish"} title="Publish" onClose=${() => setPanel(null)}>
-					<${PublishPanel} project=${project} running=${running} onChange=${loadProject} />
-				<//>
+				<${DataView} project=${project} running=${running} active=${view === "data"} onChanged=${() => setPreviewKey((k) => k + 1)} />
 			</section>
+			<${Sheet} open=${panel === "more"} title=${project.name} onClose=${() => setPanel(null)}>
+				<div class="sheet-body flush menu">
+					<button class="menu-row" onClick=${() => openFromMenu("versions")}>${icon("history")} Versions</button>
+					<button class="menu-row" onClick=${() => openFromMenu("share")}>${icon("share")} Share</button>
+					<button class="menu-row" onClick=${() => openFromMenu("github")}>${icon("github")} GitHub</button>
+					<button class="menu-row" onClick=${() => openFromMenu("logs")}>${icon("terminal")} Dev server log</button>
+					<a class="menu-row" href=${project.previewUrl} target="_blank" rel="noopener">${icon("external")} Open preview in a new tab</a>
+				</div>
+			<//>
+			<${Sheet} open=${panel === "versions"} title="Versions" onClose=${() => setPanel(null)}>
+				<${VersionsPanel}
+					id=${id}
+					running=${running}
+					canEdit=${canEdit}
+					onRestored=${() => {
+						setPreviewKey((k) => k + 1);
+						setRestored((n) => n + 1);
+					}}
+				/>
+			<//>
+			<${Sheet} open=${panel === "logs"} title="Dev server log" onClose=${() => setPanel(null)}>
+				<${LogsPanel} id=${id} />
+			<//>
+			<${Sheet} open=${panel === "github"} title="GitHub" onClose=${() => setPanel(null)}>
+				<${GitHubPanel} project=${project} running=${running} open=${panel === "github"} />
+			<//>
+			<${Sheet} open=${panel === "share"} title="Share" onClose=${() => setPanel(null)}>
+				<${SharePanel} project=${project} onChange=${loadProject} />
+			<//>
+			<${Sheet} open=${panel === "publish"} title="Publish" onClose=${() => setPanel(null)}>
+				<${PublishPanel} project=${project} running=${running} onChange=${loadProject} />
+			<//>
 		</div>
 	</div>`;
 }
@@ -2551,7 +2630,24 @@ function App() {
 	};
 	// The builder gets the whole window; its back arrow returns to the app list.
 	if (route.startsWith("/p/")) return html`<main class="main full">${view}</main><${Toaster} />`;
+	const signOut = async () => {
+		await api("/logout", { method: "POST" });
+		location.reload();
+	};
+	// On a phone the sidebar splits in two: a slim header with the brand and account, and the
+	// links as a tab bar along the bottom, within reach of the thumb.
 	return html`<div class="app">
+			<header class="mobile-head">
+				<a class="brand" href="#/"><img src="/static/logo.png" alt="" /> <b>Agency</b></a>
+				<span class="grow"></span>
+				${usage &&
+				html`<a class="usage-pill" href="#/usage" title="Your AI usage this month">
+					${!usage.unlimited && html`<${Meter} spent=${usage.spentUsd} budget=${usage.budgetUsd} />`}
+					<span class="mono">${money(usage.spentUsd)}</span>
+				</a>`}
+				<span class="avatar" title=${user.email}>${(user.name || user.email).slice(0, 1)}</span>
+				<button class="icon-btn" title="Sign out" onClick=${signOut}>${icon("logout")}</button>
+			</header>
 			<nav class="nav">
 				<a class="brand" href="#/"><img src="/static/logo.png" alt="" /> <b>Agency</b></a>
 				${link("#/", "Apps", "apps")} ${link("#/connections", "Connections", "database")}
@@ -2566,16 +2662,7 @@ function App() {
 				<div class="account">
 					<span class="avatar">${(user.name || user.email).slice(0, 1)}</span>
 					<span class="who" title=${user.email}>${user.email}</span>
-					<button
-						class="icon-btn"
-						title="Sign out"
-						onClick=${async () => {
-							await api("/logout", { method: "POST" });
-							location.reload();
-						}}
-					>
-						${icon("logout")}
-					</button>
+					<button class="icon-btn" title="Sign out" onClick=${signOut}>${icon("logout")}</button>
 				</div>
 			</nav>
 			<main class="main">${view}</main>

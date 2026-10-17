@@ -136,6 +136,20 @@ create table if not exists project_members (
 	role text not null check (role in ('viewer', 'editor')),
 	primary key (project_id, user_id)
 );
+
+-- Skills each member adds for the coding agent; files holds the skill folder ([{path, encoding, content}]).
+create table if not exists user_skills (
+	id uuid primary key default gen_random_uuid(),
+	user_id uuid not null references users(id) on delete cascade,
+	name text not null,
+	description text not null default '',
+	source text not null default '',
+	files jsonb not null default '[]',
+	enabled boolean not null default true,
+	created_at timestamptz not null default now(),
+	updated_at timestamptz not null default now(),
+	unique (user_id, name)
+);
 `;
 
 export async function migrate(): Promise<void> {

@@ -100,6 +100,16 @@ Connections are read-only by default. Built-in connectors mark which tools chang
 
 Each connection is available to all apps, or only to the apps an admin picks (the link under the connection). The agent and the gateway only see the connections shared with their app.
 
+## Skills
+
+Each member teaches the agent their own way of building under **Skills**: a design system, a library they use, a checklist. A skill is a folder with a `SKILL.md` in the [Agent Skills](https://agentskills.io/specification) format (frontmatter `name` and `description`, then instructions) plus optional scripts, references and assets. Add one by:
+
+- **From GitHub**: a link to a repository, a folder, or a `SKILL.md`, for example `https://github.com/anthropics/skills/tree/main/skills/frontend-design`. A link holding several skills imports all of them; importing again (or **Update**) refreshes it. With GitHub connected under Settings, imports use the organization's token, so private repositories in the organization work too.
+- **Upload**: a `SKILL.md`, any Markdown file with that frontmatter, or a `.zip`/`.skill` of one or more skill folders.
+- **Write**: paste or type a `SKILL.md` in the browser.
+
+Skills belong to the member, not the app. When someone sends the agent a message, the platform copies their enabled skills into the sandbox (`/root/.agency/skills`, outside the app's code) and starts pi with `--skill` for each; pi lists them to the model by name and description and loads one when the task calls for it. Typing `/skill:name` in the chat forces one. If the next message comes from a member with different skills, the idle agent restarts with theirs, keeping the conversation.
+
 ## Sharing apps
 
 Every app has an owner (whoever created it); admins can do everything with every app. In the builder's **Share** sheet the owner picks what the rest of the team gets (nothing, view, or edit) and adds people as viewers or editors:

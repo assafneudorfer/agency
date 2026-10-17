@@ -3,6 +3,7 @@ import { config } from "./config.ts";
 import { execIn, spawnDocker } from "./docker.ts";
 import { autoPush } from "./github.ts";
 import { ensureSandbox, type Project, sandboxName } from "./projects.ts";
+import { installSkills, skillsFingerprint } from "./skills.ts";
 import { recordUsage } from "./usage.ts";
 
 export type AgentEvent = { type: string; [key: string]: unknown };
@@ -30,9 +31,14 @@ export class AgentBridge {
 	running = false;
 	// The user whose prompt the agent is working on; the cost of each assistant message is charged to them.
 	private promptedBy: string | undefined;
+	// Whose skills pi loads: the member prompting it, or the owner until someone does.
+	private skillsOf: string;
+	// Fingerprint of the skills the running pi was started with.
+	private loadedSkills = "";
 
 	constructor(project: Project) {
 		this.project = project;
+		this.skillsOf = project.owner_id;
 	}
 
 	subscribe(listener: Listener): () => void {
@@ -44,9 +50,24 @@ export class AgentBridge {
 		for (const listener of this.listeners) listener(event);
 	}
 
-	private async start(): Promise<ChildProcess> {
-		if (this.child) return this.child;
+	private starting: Promise<ChildProcess> | undefined;
+
+	private start(): Promise<ChildProcess> {
+		if (this.child) return Promise.resolve(this.child);
+		this.starting ??= this.launch().finally(() => {
+			this.starting = undefined;
+		});
+		return this.starting;
+	}
+
+	private async launch(): Promise<ChildProcess> {
 		await ensureSandbox(this.project);
+		// A skill that fails to copy shouldn't stop anyone building; pi then starts without skills.
+		const skills = await installSkills(sandboxName(this.project), this.skillsOf).catch((error) => {
+			console.error(`[agent ${this.project.slug}] ${error instanceof Error ? error.message : error}`);
+			return { dirs: [] as string[], fingerprint: "" };
+		});
+		this.loadedSkills = skills.fingerprint;
 		const env: string[] = [];
 		for (const name of config.agentEnv) {
 			const value = process.env[name];
@@ -63,6 +84,7 @@ export class AgentBridge {
 			"--append-system-prompt",
 			"/opt/agency/system-prompt.md",
 		];
+		for (const dir of skills.dirs) piArgs.push("--skill", dir);
 		if (config.model) piArgs.push("--model", config.model);
 		const child = spawnDocker(["exec", "-i", ...env, "-w", "/workspace", sandboxName(this.project), ...piArgs]);
 		this.child = child;
@@ -144,8 +166,14 @@ export class AgentBridge {
 		});
 	}
 
-	prompt(message: string, userId: string): Promise<unknown> {
+	async prompt(message: string, userId: string): Promise<unknown> {
 		this.promptedBy = userId;
+		// pi reads skills when it starts, so an idle pi restarts (keeping its session) when the
+		// member prompting it has different skills. A follow-up while it works uses the loaded set.
+		if (!this.running) {
+			this.skillsOf = userId;
+			if (this.child && (await skillsFingerprint(userId)) !== this.loadedSkills) await this.restart();
+		}
 		return this.request({
 			type: "prompt",
 			message,
@@ -174,6 +202,19 @@ export class AgentBridge {
 
 	stop(): void {
 		this.child?.stdin?.end();
+	}
+
+	/** Ends the idle pi process; the next request starts a fresh one on the same session. */
+	private async restart(): Promise<void> {
+		const child = this.child;
+		if (!child) return;
+		this.child = undefined;
+		this.buffer = "";
+		const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+		child.stdin?.end();
+		const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+		await closed;
+		clearTimeout(timer);
 	}
 }
 

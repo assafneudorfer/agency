@@ -72,6 +72,18 @@ import {
 	unlinkRepository,
 } from "./github.ts";
 import { listDeployments, publish, rollback, unpublish } from "./publish.ts";
+import {
+	createSkill,
+	deleteSkill,
+	getSkill,
+	importFromGitHub,
+	importUpload,
+	listSkills,
+	refreshSkill,
+	SKILL_TEMPLATE,
+	SkillError,
+	updateSkill,
+} from "./skills.ts";
 import { saveSso, signInOptions, SsoError, ssoFinish, ssoStartUrl, ssoView } from "./sso.ts";
 import { assertBudget, BudgetError, listUsersWithUsage, parseBudget, setBudget, usageDetail, usageFor } from "./usage.ts";
 
@@ -111,7 +123,7 @@ app.onError((error, c) => {
 	if (error instanceof BudgetError) return c.json({ error: error.message, code: "budget" }, 402);
 	if (error instanceof DataError) return c.json({ error: error.message }, 400);
 	if (error instanceof AccessError) return c.json({ error: error.message }, 403);
-	if (error instanceof GitHubError || error instanceof SsoError) return c.json({ error: error.message }, 400);
+	if (error instanceof GitHubError || error instanceof SsoError || error instanceof SkillError) return c.json({ error: error.message }, 400);
 	if (error instanceof NotFoundError) return c.json({ error: error.message }, 404);
 	console.error(error);
 	return c.json({ error: errorMessage(error) }, 500);
@@ -578,6 +590,42 @@ api.put("/settings/github", requireAdmin, async (c) => c.json(await saveGitHub(a
 
 api.delete("/settings/github", requireAdmin, async (c) => {
 	await removeGitHub();
+	return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Skills: each member's own, loaded into the agent for every build they prompt
+
+api.get("/skills", async (c) => c.json({ skills: await listSkills(c.get("user").id), template: SKILL_TEMPLATE }));
+
+api.get("/skills/:id", async (c) => c.json(await getSkill(c.get("user").id, c.req.param("id"))));
+
+api.post("/skills", async (c) => {
+	const body = await c.req.json<{ content?: string }>();
+	return c.json(await createSkill(c.get("user").id, String(body.content ?? "")), 201);
+});
+
+/** The raw file is the body; its name comes in the query string. */
+api.post("/skills/upload", async (c) => {
+	const data = Buffer.from(await c.req.arrayBuffer());
+	if (data.length === 0) return c.json({ error: "The file is empty" }, 400);
+	return c.json(await importUpload(c.get("user").id, c.req.query("filename") ?? "", data));
+});
+
+api.post("/skills/github", async (c) => {
+	const body = await c.req.json<{ url?: string }>();
+	return c.json(await importFromGitHub(c.get("user").id, String(body.url ?? "")));
+});
+
+api.post("/skills/:id/refresh", async (c) => c.json(await refreshSkill(c.get("user").id, c.req.param("id"))));
+
+api.put("/skills/:id", async (c) => {
+	const body = await c.req.json<{ content?: string; enabled?: boolean }>();
+	return c.json(await updateSkill(c.get("user").id, c.req.param("id"), body));
+});
+
+api.delete("/skills/:id", async (c) => {
+	await deleteSkill(c.get("user").id, c.req.param("id"));
 	return c.json({ ok: true });
 });
 

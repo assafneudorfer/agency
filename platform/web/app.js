@@ -197,6 +197,8 @@ const ICONS = {
 	settings: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
 	more: '<circle cx="5" cy="12" r="1.25"/><circle cx="12" cy="12" r="1.25"/><circle cx="19" cy="12" r="1.25"/>',
 	message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+	wand: '<path d="m15 4 5 5"/><path d="M3 21 15.5 8.5"/><path d="M8 2v3"/><path d="M6.5 3.5h3"/><path d="M20 14v3"/><path d="M18.5 15.5h3"/><path d="M11 3l.5 1"/>',
+	upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
 	infinity: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4z"/>',
 };
 
@@ -2074,6 +2076,293 @@ function Connections({ user }) {
 	</div>`;
 }
 
+// ---------------------------------------------------------------------------
+// Skills: the member's own instructions for the coding agent
+
+const SKILL_EXAMPLES = [
+	["frontend-design", "https://github.com/anthropics/skills/tree/main/skills/frontend-design"],
+	["webapp-testing", "https://github.com/anthropics/skills/tree/main/skills/webapp-testing"],
+	["brand-guidelines", "https://github.com/anthropics/skills/tree/main/skills/brand-guidelines"],
+];
+
+function skillSource(source) {
+	if (source.startsWith("https://github.com/")) {
+		// owner/repo and the skill's folder; the branch in between can itself contain slashes.
+		const [owner, repo, , ...rest] = source.replace("https://github.com/", "").split("/");
+		const folder = rest.length > 1 ? ` · ${rest[rest.length - 1]}` : "";
+		return html`<a href=${source} target="_blank" rel="noopener">${icon("github")} ${owner}/${repo}${folder}</a>`;
+	}
+	if (source.startsWith("upload:")) return html`${icon("upload")} ${source.slice(7)}`;
+	return html`${icon("pencil")} Written here`;
+}
+
+function savedMessage(result) {
+	const names = result.saved.map((s) => s.name);
+	const verb = result.saved.every((s) => s.status === "updated") ? "Updated" : "Added";
+	const text = names.length <= 3 ? names.join(", ") : `${names.length} skills`;
+	return `${verb} ${text}${result.skipped.length ? `; skipped ${result.skipped.length}` : ""}`;
+}
+
+function SkillEditor({ id, onSaved, onClose }) {
+	const [skill, setSkill] = useState(null);
+	const [content, setContent] = useState("");
+	const [error, setError] = useState("");
+	const [busy, setBusy] = useState(false);
+	useEffect(() => {
+		api(`/skills/${id}`).then(
+			(data) => {
+				setSkill(data);
+				setContent(data.content);
+			},
+			(err) => setError(err.message),
+		);
+	}, [id]);
+	if (!skill) return html`<div class="sheet-body">${error ? html`<p class="error">${error}</p>` : html`<div class="empty"><span class="spinner"></span></div>`}</div>`;
+	const save = async () => {
+		setBusy(true);
+		setError("");
+		try {
+			await api(`/skills/${id}`, { method: "PUT", body: { content } });
+			toast("Saved. Your next message to the agent uses it.");
+			onSaved();
+			onClose();
+		} catch (err) {
+			setError(err.message);
+		}
+		setBusy(false);
+	};
+	const others = skill.files.filter((f) => f.path !== "SKILL.md");
+	return html`<div class="sheet-body">
+		<label class="field">
+			<span>SKILL.md</span>
+			<textarea class="textarea mono skill-md" rows="16" spellcheck="false" value=${content} onInput=${(e) => setContent(e.target.value)}></textarea>
+		</label>
+		${others.length > 0 &&
+		html`<div class="field">
+			<span>Other files <span class="hint">${others.length}</span></span>
+			<ul class="skill-files">
+				${others.map((f) => html`<li>${icon("file")} <span class="mono grow">${f.path}</span> <span class="faint">${bytes(f.size)}</span></li>`)}
+			</ul>
+		</div>`}
+		${error && html`<p class="error">${error}</p>`}
+		<button class="btn primary" disabled=${busy || content === skill.content} onClick=${save}>
+			${busy ? html`<span class="spinner"></span>` : icon("check")} Save
+		</button>
+	</div>`;
+}
+
+function bytes(size) {
+	if (size < 1024) return `${size} B`;
+	if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+	return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const SKILL_TABS = ["github", "upload", "write"];
+
+function Skills() {
+	const [skills, setSkills] = useState(null);
+	const [template, setTemplate] = useState("");
+	const [tab, setTab] = useState("github");
+	const [url, setUrl] = useState("");
+	const [content, setContent] = useState("");
+	const [error, setError] = useState("");
+	const [busy, setBusy] = useState("");
+	const [editing, setEditing] = useState(null);
+	const [dragging, setDragging] = useState(false);
+	const fileInput = useRef(null);
+	const load = () =>
+		api("/skills").then(
+			(data) => {
+				setSkills(data.skills);
+				setTemplate(data.template);
+				setContent((current) => current || data.template);
+			},
+			(err) => setError(err.message),
+		);
+	useEffect(() => {
+		load();
+	}, []);
+	const run = async (what, action) => {
+		setBusy(what);
+		setError("");
+		try {
+			await action();
+		} catch (err) {
+			setError(err.message);
+		}
+		setBusy("");
+	};
+	const importGitHub = (e, link = url) => {
+		e?.preventDefault();
+		return run("github", async () => {
+			const result = await api("/skills/github", { method: "POST", body: { url: link.trim() } });
+			toast(savedMessage(result));
+			setUrl("");
+			await load();
+		});
+	};
+	const upload = (file) =>
+		file &&
+		run("upload", async () => {
+			const response = await fetch(`/api/skills/upload?filename=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.error ?? `Upload failed (${response.status})`);
+			toast(savedMessage(data));
+			await load();
+		});
+	const write = (e) => {
+		e.preventDefault();
+		return run("write", async () => {
+			const skill = await api("/skills", { method: "POST", body: { content } });
+			toast(`Added ${skill.name}`);
+			setContent(template);
+			await load();
+		});
+	};
+	const toggle = async (skill) => {
+		setSkills(skills.map((s) => (s.id === skill.id ? { ...s, enabled: !s.enabled } : s)));
+		await api(`/skills/${skill.id}`, { method: "PUT", body: { enabled: !skill.enabled } }).catch((err) => toast(err.message, "error"));
+		load();
+	};
+	const refresh = (skill) =>
+		api(`/skills/${skill.id}/refresh`, { method: "POST" }).then(
+			(result) => {
+				toast(savedMessage(result));
+				load();
+			},
+			(err) => toast(err.message, "error"),
+		);
+	const remove = async (skill) => {
+		if (!confirm(`Remove ${skill.name}? The agent stops using it in your next message.`)) return;
+		await api(`/skills/${skill.id}`, { method: "DELETE" });
+		load();
+	};
+	const enabled = (skills ?? []).filter((s) => s.enabled).length;
+	return html`<div class="page">
+		<header class="page-head">
+			<h1>Skills</h1>
+			<p>
+				Teach the agent how you like things built: your design system, a library you use, a checklist. Skills are yours; every app you build
+				uses the ones that are on. Type <span class="mono">/skill:name</span> in a chat to use one on purpose.
+			</p>
+		</header>
+		<div class="stack">
+			<div class="card">
+				${skills === null
+					? html`<div class="empty"><span class="spinner"></span></div>`
+					: skills.length === 0
+						? html`<div class="empty">${icon("wand")} No skills yet. Add one below.</div>`
+						: html`<div class="card-head row">
+									<h2 class="grow">Your skills</h2>
+									<span class="faint">${enabled} of ${skills.length} on</span>
+								</div>
+								${skills.map(
+									(skill) => html`<div class=${`list-row skill-row${skill.enabled ? "" : " off"}`}>
+										<label class="switch" title=${skill.enabled ? "On: the agent can use it" : "Off"}>
+											<input type="checkbox" checked=${skill.enabled} onChange=${() => toggle(skill)} aria-label=${`Use ${skill.name}`} />
+											<span></span>
+										</label>
+										<div class="grow">
+											<div class="title mono">${skill.name}</div>
+											<div class="sub clamp">${skill.description}</div>
+											<div class="sub skill-meta">
+												${skillSource(skill.source)}
+												<span>${skill.fileCount} ${skill.fileCount === 1 ? "file" : "files"}</span>
+												<span>Updated ${timeAgo(skill.updatedAt)}</span>
+											</div>
+										</div>
+										<div class="row-actions">
+											${skill.source.startsWith("https://github.com/") &&
+											html`<button class="btn sm" title="Import again from GitHub" onClick=${() => refresh(skill)}>${icon("refresh")} Update</button>`}
+											<button class="btn sm" onClick=${() => setEditing(skill)}>Edit</button>
+											<button class="btn sm danger" title="Remove" onClick=${() => remove(skill)}>${icon("trash")}</button>
+										</div>
+									</div>`,
+								)}`}
+			</div>
+			<div class="card">
+				<div class="card-head">
+					<h2>Add a skill</h2>
+					<p>Any skill in the Agent Skills format works: a folder with a SKILL.md, plus scripts or references if it has them.</p>
+				</div>
+				<div class="card-body stack-sm">
+					<div class="seg skill-tabs" role="tablist" style=${`--index:${SKILL_TABS.indexOf(tab)};--count:3`}>
+						<button role="tab" aria-selected=${tab === "github"} onClick=${() => setTab("github")}>${icon("github")} From GitHub</button>
+						<button role="tab" aria-selected=${tab === "upload"} onClick=${() => setTab("upload")}>${icon("upload")} Upload</button>
+						<button role="tab" aria-selected=${tab === "write"} onClick=${() => setTab("write")}>${icon("pencil")} Write</button>
+					</div>
+					${tab === "github" &&
+					html`<form class="stack-sm" onSubmit=${importGitHub}>
+						<label class="field">
+							<span>Link <span class="hint">a repository, a folder, or a SKILL.md</span></span>
+							<div class="row">
+								<input
+									class="input mono grow"
+									placeholder="https://github.com/owner/repo/tree/main/skills/my-skill"
+									value=${url}
+									onInput=${(e) => setUrl(e.target.value)}
+									required
+								/>
+								<button class="btn primary" disabled=${busy === "github" || !url.trim()}>
+									${busy === "github" ? html`<span class="spinner"></span>` : icon("plus")} Import
+								</button>
+							</div>
+						</label>
+						<div class="chips">
+							<span class="faint">Try:</span>
+							${SKILL_EXAMPLES.map(
+								([name, link]) => html`<button type="button" class="chip" disabled=${Boolean(busy)} onClick=${() => importGitHub(null, link)}>${name}</button>`,
+							)}
+						</div>
+						<p class="faint small">A link to a repository or folder with several skills imports all of them. Importing a skill you already have updates it.</p>
+					</form>`}
+					${tab === "upload" &&
+					html`<div
+						class=${`dropzone${dragging ? " over" : ""}`}
+						onDragOver=${(e) => {
+							e.preventDefault();
+							setDragging(true);
+						}}
+						onDragLeave=${() => setDragging(false)}
+						onDrop=${(e) => {
+							e.preventDefault();
+							setDragging(false);
+							upload(e.dataTransfer.files[0]);
+						}}
+						onClick=${() => fileInput.current.click()}
+					>
+						${busy === "upload" ? html`<span class="spinner"></span>` : icon("upload")}
+						<b>Drop a SKILL.md or a .zip of a skill folder</b>
+						<span class="faint">or click to choose a file (.md, .zip, .skill)</span>
+						<input
+							ref=${fileInput}
+							type="file"
+							accept=".md,.markdown,.zip,.skill"
+							hidden
+							onChange=${(e) => {
+								upload(e.target.files[0]);
+								e.target.value = "";
+							}}
+						/>
+					</div>`}
+					${tab === "write" &&
+					html`<form class="stack-sm" onSubmit=${write}>
+						<label class="field">
+							<span>SKILL.md <span class="hint">name and description go in the header</span></span>
+							<textarea class="textarea mono skill-md" rows="12" spellcheck="false" value=${content} onInput=${(e) => setContent(e.target.value)}></textarea>
+						</label>
+						<div><button class="btn primary" disabled=${busy === "write" || content === template}>${busy === "write" ? html`<span class="spinner"></span>` : icon("plus")} Add skill</button></div>
+					</form>`}
+					${error && html`<p class="error">${error}</p>`}
+				</div>
+			</div>
+		</div>
+		<${Sheet} open=${Boolean(editing)} title=${editing?.name ?? ""} onClose=${() => setEditing(null)}>
+			${editing && html`<${SkillEditor} key=${editing.id} id=${editing.id} onSaved=${load} onClose=${() => setEditing(null)} />`}
+		</${Sheet}>
+	</div>`;
+}
+
 function UsagePage() {
 	const [usage, setUsage] = useState(null);
 	const [error, setError] = useState("");
@@ -2614,6 +2903,7 @@ function App() {
 		if (route.startsWith("/connections")) return html`<${Connections} user=${user} />`;
 		if (route.startsWith("/team")) return html`<${Team} user=${user} onChange=${refreshUsage} />`;
 		if (route.startsWith("/usage")) return html`<${UsagePage} />`;
+		if (route.startsWith("/skills")) return html`<${Skills} />`;
 		if (route.startsWith("/settings") && user.role === "admin") return html`<${Settings} />`;
 		return html`<${Home} />`;
 	}, [route, user]);
@@ -2650,7 +2940,7 @@ function App() {
 			</header>
 			<nav class="nav">
 				<a class="brand" href="#/"><img src="/static/logo.png" alt="" /> <b>Agency</b></a>
-				${link("#/", "Apps", "apps")} ${link("#/connections", "Connections", "database")}
+				${link("#/", "Apps", "apps")} ${link("#/connections", "Connections", "database")} ${link("#/skills", "Skills", "wand")}
 				${link("#/usage", "Usage", "gauge")} ${user.role === "admin" && link("#/team", "Team", "users")}
 				${user.role === "admin" && link("#/settings", "Settings", "settings")}
 				<span class="spacer"></span>

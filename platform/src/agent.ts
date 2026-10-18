@@ -252,6 +252,16 @@ export class AgentBridge {
 		this.child?.stdin?.end();
 	}
 
+	/** True while a pi process runs for this app. */
+	get alive(): boolean {
+		return Boolean(this.child);
+	}
+
+	/** Ends an idle pi process; the next request starts it again on the same session. */
+	async end(): Promise<void> {
+		if (!this.running) await this.restart();
+	}
+
 	/** Ends the idle pi process; the next request starts a fresh one on the same session. */
 	private async restart(): Promise<void> {
 		const child = this.child;
@@ -275,6 +285,14 @@ export function bridgeFor(project: Project): AgentBridge {
 		bridges.set(project.id, bridge);
 	}
 	return bridge;
+}
+
+export function bridgeIfAny(projectId: string): AgentBridge | undefined {
+	return bridges.get(projectId);
+}
+
+export function allBridges(): Iterable<AgentBridge> {
+	return bridges.values();
 }
 
 export function dropBridge(projectId: string): void {

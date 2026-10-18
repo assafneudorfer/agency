@@ -147,7 +147,7 @@ The script asks how to set things up, shows the Terraform plan, and waits until 
 | **Cloudflare + Claude API key** | Cloudflare | Anthropic API | A Cloudflare token (Zone > DNS > Edit) and an Anthropic key |
 | **All on AWS** | Route 53 | Amazon Bedrock | Nothing: the server's IAM roles do it |
 
-Then sign in at `https://<your-domain>` with the admin email and password you chose. A `small` server (t3.medium) costs about $37 a month running and about $7 a month stopped. The [deploy guide](docs/deploy.md) covers both setups, moving between them, updates, backups and restore.
+Then sign in at `https://<your-domain>` with the admin email and password you chose. A `small` server (t3.medium) costs about $37 a month running and about $7 a month stopped. Published apps can run on the same server or on AWS Fargate, where each app scales on its own. The [deploy guide](docs/deploy.md) covers the setups, moving between them, updates, backups and restore.
 
 ```bash
 ./deploy.sh update     # redeploy the latest code

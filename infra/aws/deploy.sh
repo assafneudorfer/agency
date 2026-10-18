@@ -6,6 +6,7 @@
 #   ./deploy.sh            create or update the stack (asks for anything it needs)
 #   ./deploy.sh update     pull the latest code on the server and rebuild
 #   ./deploy.sh use-aws    move a Cloudflare + Claude API key deployment to all on AWS
+#   ./deploy.sh use-fargate  run published apps on AWS Fargate instead of the server (they move over)
 #   ./deploy.sh stop       stop the server to save money (data, address and DNS stay)
 #   ./deploy.sh start      start it again; the stack comes back on its own
 #   ./deploy.sh status     show whether the server is running
@@ -180,6 +181,16 @@ write_settings() {
 	ask AWS_REGION_CHOICE "AWS region" "${AWS_REGION:-us-east-1}"
 	ask SIZE "Instance size: small (t3.medium, for testing) or standard (t3.xlarge)" "small"
 	ask REPO_REF "Git branch to deploy" "main"
+	echo "Where should published apps run?"
+	echo "  1) On the Agency server, next to the builder (simplest, one machine)"
+	echo "  2) AWS Fargate: each app its own service that scales with traffic, isolated from the builder"
+	echo "     (about \$13 a month per published app: 0.25 vCPU, 0.5 GB and a public IPv4 address)"
+	ask APPS_CHOICE "Choose 1 or 2" "1"
+	case "$APPS_CHOICE" in
+	1) APP_RUNTIME=docker ;;
+	2) APP_RUNTIME=fargate ;;
+	*) fail "Choose 1 or 2" ;;
+	esac
 
 	local dns_settings model=""
 	if [ "$DNS_PROVIDER" = "route53" ]; then
@@ -212,6 +223,7 @@ instance_type      = "$instance_type"
 volume_size_gb     = $volume
 sandbox_memory     = "$sandbox_memory"
 sandbox_cpus       = "$sandbox_cpus"
+app_runtime        = "$APP_RUNTIME"
 EOF
 }
 
@@ -370,6 +382,29 @@ EOF
 	update
 }
 
+# Runs published apps on Fargate from now on. The platform moves apps that are already published
+# when it restarts, with the version each one had; their preview sandboxes stay on the server.
+use_fargate() {
+	[ -f "$SETTINGS" ] || fail "Nothing deployed yet. Run ./deploy.sh and choose Fargate for published apps."
+	[ "$(setting app_runtime docker)" != "fargate" ] || fail "Published apps already run on Fargate."
+	sed -i.bak -E '/^app_runtime /d' "$SETTINGS"
+	rm -f "$SETTINGS.bak"
+	echo 'app_runtime        = "fargate"' >>"$SETTINGS"
+	deploy
+	update
+}
+
+# Services the platform created in the apps cluster are not in Terraform's state; they go first.
+delete_app_services() {
+	local cluster
+	cluster=$(terraform output -raw apps_cluster 2>/dev/null || true)
+	[ -n "$cluster" ] && [ "$cluster" != "null" ] || return 0
+	info "Deleting published apps on Fargate"
+	for service in $(aws ecs list-services --region "$(region)" --cluster "$cluster" --query 'serviceArns[]' --output text); do
+		aws ecs delete-service --region "$(region)" --cluster "$cluster" --service "$service" --force >/dev/null
+	done
+}
+
 case "$ACTION" in
 deploy)
 	check_aws
@@ -382,6 +417,10 @@ update)
 use-aws)
 	check_aws
 	use_aws
+	;;
+use-fargate)
+	check_aws
+	use_fargate
 	;;
 stop)
 	check_aws
@@ -420,9 +459,10 @@ destroy)
 	tf_secret_vars
 	read -rp "Delete the Agency server, its data, backups and DNS records? Type the domain to confirm: " confirm
 	[ "$confirm" = "$(setting base_domain)" ] || fail "Cancelled"
+	delete_app_services
 	terraform destroy -input=false -auto-approve
 	;;
 *)
-	fail "Unknown command '$ACTION'. Use deploy, update, use-aws, stop, start, status, backup or destroy."
+	fail "Unknown command '$ACTION'. Use deploy, update, use-aws, use-fargate, stop, start, status, backup or destroy."
 	;;
 esac

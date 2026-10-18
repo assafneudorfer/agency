@@ -1,6 +1,7 @@
 import type { TeamAccess } from "./access.ts";
 import { config, previewHost } from "./config.ts";
 import { decryptJson, encryptJson, randomToken } from "./crypto.ts";
+import { appRuntime } from "./apps.ts";
 import { pool, query, queryOne } from "./db.ts";
 import { containerState, docker, imageId, envArgs, labelArgs, routeLabels } from "./docker.ts";
 
@@ -142,6 +143,16 @@ export async function ensureLiveDatabase(project: Project, onLog: (line: string)
 }
 
 /** Environment shared by the sandbox and published containers. Holds no organization secrets. */
+/** Environment of the published app: its live database, the data gateway and its token. */
+export async function publishedEnv(project: Project): Promise<Record<string, string>> {
+	const env = appEnv(project);
+	return {
+		DATABASE_URL: await ensureLiveDatabase(project),
+		AGENCY_GATEWAY_URL: env.AGENCY_GATEWAY_URL,
+		AGENCY_APP_TOKEN: env.AGENCY_APP_TOKEN,
+	};
+}
+
 export function appEnv(project: Project): Record<string, string> {
 	return {
 		DATABASE_URL: projectDatabaseUrl(project),
@@ -236,11 +247,9 @@ export async function ensureSandbox(project: Project, options: { upgrade?: boole
 }
 
 export async function deleteProject(project: Project): Promise<void> {
-	await docker(["rm", "-f", sandboxName(project), appContainerName(project)], { allowFailure: true });
+	await appRuntime.remove(project);
+	await docker(["rm", "-f", sandboxName(project)], { allowFailure: true });
 	await docker(["volume", "rm", "-f", `agency-ws-${project.slug}`], { allowFailure: true });
-	const images = await docker(["images", "-q", `agency-app-${project.slug}`], { allowFailure: true });
-	const ids = images.stdout.split("\n").filter(Boolean);
-	if (ids.length > 0) await docker(["rmi", "-f", ...ids], { allowFailure: true });
 	await query("delete from projects where id = $1", [project.id]);
 	await dropDatabase(project.db_name);
 	if (project.live_db_name) await dropDatabase(project.live_db_name);

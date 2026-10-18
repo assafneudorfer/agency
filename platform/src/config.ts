@@ -43,6 +43,25 @@ export const config = {
 	sandboxMemory: optional("AGENCY_SANDBOX_MEMORY", "3g"),
 	sandboxCpus: optional("AGENCY_SANDBOX_CPUS", "2"),
 	appMemory: optional("AGENCY_APP_MEMORY", "512m"),
+	// Where published apps run: "docker" (containers on this server) or "fargate" (an ECS service per app).
+	appRuntime: optional("AGENCY_APP_RUNTIME", "docker") as "docker" | "fargate",
+	fargate: {
+		cluster: process.env.AGENCY_ECS_CLUSTER ?? "",
+		repository: process.env.AGENCY_ECR_REPOSITORY ?? "",
+		subnets: (process.env.AGENCY_ECS_SUBNETS ?? "").split(",").filter(Boolean),
+		securityGroup: process.env.AGENCY_ECS_SECURITY_GROUP ?? "",
+		executionRoleArn: process.env.AGENCY_ECS_EXECUTION_ROLE_ARN ?? "",
+		logGroup: process.env.AGENCY_ECS_LOG_GROUP ?? "",
+		// Short-lived keys for the apps role, refreshed by the host (infra/aws/host/agency-aws-credentials).
+		credentialsFile: process.env.AGENCY_APPS_CREDENTIALS_FILE ?? "",
+		// This server's private address: published apps reach their database here.
+		databaseHost: process.env.AGENCY_HOST_PRIVATE_IP ?? "",
+		cpu: optional("AGENCY_APP_CPU", "256"),
+		memoryMb: optional("AGENCY_APP_MEMORY_MB", "512"),
+		maxTasks: Number(optional("AGENCY_APP_MAX_TASKS", "3")),
+		// Where Traefik reads the routes to apps on Fargate (its file provider watches this directory).
+		routesDir: optional("AGENCY_TRAEFIK_DYNAMIC_DIR", "/traefik-dynamic"),
+	},
 	// Minutes without use before an app's agent process ends, and before its sandbox container stops. 0 keeps them running.
 	piIdleMinutes: Number(optional("AGENCY_PI_IDLE_MINUTES", "10")),
 	sandboxIdleMinutes: Number(optional("AGENCY_SANDBOX_IDLE_MINUTES", "30")),

@@ -21,6 +21,7 @@ locals {
     ["docker-compose.yml"],
     local.route53 ? ["docker-compose.route53.yml"] : [],
     local.bedrock ? ["docker-compose.bedrock.yml"] : [],
+    local.fargate ? ["docker-compose.fargate.yml"] : [],
   ))
 }
 
@@ -97,6 +98,17 @@ resource "aws_ssm_parameter" "env" {
       "AGENCY_DNS_ROLE_ARN=${aws_iam_role.dns[0].arn}",
     ] : ["CLOUDFLARE_DNS_API_TOKEN=${var.cloudflare_dns_api_token}"],
     local.bedrock ? ["AGENCY_BEDROCK_ROLE_ARN=${aws_iam_role.bedrock[0].arn}"] : [],
+    local.fargate ? [
+      "AGENCY_APP_RUNTIME=fargate",
+      "AGENCY_APPS_ROLE_ARN=${aws_iam_role.apps[0].arn}",
+      "AGENCY_ECS_CLUSTER=${aws_ecs_cluster.apps[0].name}",
+      "AGENCY_ECR_REPOSITORY=${aws_ecr_repository.apps[0].name}",
+      "AGENCY_ECS_SUBNETS=${join(",", data.aws_subnets.default.ids)}",
+      "AGENCY_ECS_SECURITY_GROUP=${aws_security_group.apps[0].id}",
+      "AGENCY_ECS_EXECUTION_ROLE_ARN=${aws_iam_role.app_execution[0].arn}",
+      "AGENCY_ECS_LOG_GROUP=${aws_cloudwatch_log_group.apps[0].name}",
+      "AGENCY_APP_MAX_TASKS=${var.app_max_tasks}",
+    ] : [],
   ))
 }
 
@@ -192,7 +204,7 @@ resource "aws_iam_role_policy" "bedrock" {
 }
 
 resource "aws_iam_role_policy" "assume_runtime_roles" {
-  count = local.route53 || local.bedrock ? 1 : 0
+  count = local.route53 || local.bedrock || local.fargate ? 1 : 0
   name  = "assume-runtime-roles"
   role  = aws_iam_role.instance.id
   policy = jsonencode({
@@ -200,7 +212,7 @@ resource "aws_iam_role_policy" "assume_runtime_roles" {
     Statement = [{
       Effect   = "Allow"
       Action   = "sts:AssumeRole"
-      Resource = concat(aws_iam_role.dns[*].arn, aws_iam_role.bedrock[*].arn)
+      Resource = concat(aws_iam_role.dns[*].arn, aws_iam_role.bedrock[*].arn, aws_iam_role.apps[*].arn)
     }]
   })
 }

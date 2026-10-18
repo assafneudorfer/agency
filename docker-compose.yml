@@ -11,6 +11,9 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=agency
+      # Routes the platform writes for published apps that run elsewhere (AWS Fargate).
+      - --providers.file.directory=/dynamic
+      - --providers.file.watch=true
       - --entrypoints.http.address=:80
       - --entrypoints.http.http.redirections.entrypoint.to=app
       - --entrypoints.http.http.redirections.entrypoint.scheme=https
@@ -29,6 +32,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - letsencrypt:/letsencrypt
+      - traefik-dynamic:/dynamic:ro
     labels:
       # Previews and published apps use this middleware: only signed-in team members get through.
       # Declared on Traefik itself so it exists even while the platform restarts.
@@ -77,6 +81,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - traefik-dynamic:/traefik-dynamic
     depends_on:
       postgres:
         condition: service_healthy
@@ -111,3 +116,4 @@ networks:
 volumes:
   pgdata:
   letsencrypt:
+  traefik-dynamic:

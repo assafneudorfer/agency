@@ -141,3 +141,19 @@ variable "backup_retention_days" {
   type        = number
   default     = 30
 }
+
+variable "app_runtime" {
+  description = "Where published apps run: docker (containers on the Agency server) or fargate (an ECS service per app that scales with traffic, isolated from the builder)"
+  type        = string
+  default     = "docker"
+  validation {
+    condition     = contains(["docker", "fargate"], var.app_runtime)
+    error_message = "app_runtime must be docker or fargate."
+  }
+}
+
+variable "app_max_tasks" {
+  description = "Most tasks one published app scales out to on Fargate"
+  type        = number
+  default     = 3
+}

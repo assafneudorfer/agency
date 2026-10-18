@@ -36,7 +36,7 @@ install -m 0755 "$HERE/agency-aws-credentials" /usr/local/bin/agency-aws-credent
 # All-AWS setup: short-lived Route 53 and Bedrock credentials, refreshed before Docker starts and every 15 minutes.
 cat > /etc/systemd/system/agency-aws-credentials.service <<'UNIT'
 [Unit]
-Description=Refresh Agency's Route 53 and Bedrock credentials
+Description=Refresh Agency's AWS credentials (Route 53, Bedrock, Fargate apps)
 Wants=network-online.target
 After=network-online.target
 Before=docker.service
@@ -63,7 +63,14 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now agency-backup.timer >/dev/null
-if grep -qE '^AGENCY_(DNS|BEDROCK)_ROLE_ARN=.' /opt/agency-src/.env 2>/dev/null; then
+# Published apps on Fargate reach their databases at this server's private address.
+if grep -q '^AGENCY_APP_RUNTIME=fargate' /opt/agency-src/.env 2>/dev/null; then
+	imds_token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
+	private_ip=$(curl -fsS -H "X-aws-ec2-metadata-token: $imds_token" http://169.254.169.254/latest/meta-data/local-ipv4)
+	sed -i '/^AGENCY_HOST_PRIVATE_IP=/d' /opt/agency-src/.env
+	echo "AGENCY_HOST_PRIVATE_IP=$private_ip" >>/opt/agency-src/.env
+fi
+if grep -qE '^AGENCY_(DNS|BEDROCK|APPS)_ROLE_ARN=.' /opt/agency-src/.env 2>/dev/null; then
 	had_dns=$([ -f /var/lib/agency/aws/dns/credentials.json ] && echo yes || true)
 	systemctl enable agency-aws-credentials.service >/dev/null
 	systemctl enable --now agency-aws-credentials.timer >/dev/null

@@ -1,8 +1,9 @@
-import { appHost, config } from "./config.ts";
+import { appHost } from "./config.ts";
 import { query, queryOne } from "./db.ts";
-import { docker, envArgs, execIn, labelArgs, routeLabels, spawnDocker } from "./docker.ts";
+import { appRuntime } from "./apps.ts";
+import { execIn, spawnDocker } from "./docker.ts";
 import { bridgeFor } from "./agent.ts";
-import { appContainerName, appEnv, ensureLiveDatabase, type Project, sandboxName } from "./projects.ts";
+import { ensureLiveDatabase, type Project, publishedEnv, sandboxName } from "./projects.ts";
 
 export interface Deployment {
 	id: number;
@@ -66,36 +67,6 @@ function buildImage(project: Project, tag: string): Promise<void> {
 	});
 }
 
-async function runApp(project: Project, image: string): Promise<void> {
-	const name = appContainerName(project);
-	const env = appEnv(project);
-	const databaseUrl = await ensureLiveDatabase(project);
-	await docker(["rm", "-f", name], { allowFailure: true });
-	await docker([
-		"run",
-		"-d",
-		"--name",
-		name,
-		"--network",
-		config.dockerNetwork,
-		"--restart",
-		"unless-stopped",
-		"--memory",
-		config.appMemory,
-		...envArgs({
-			DATABASE_URL: databaseUrl,
-			AGENCY_GATEWAY_URL: env.AGENCY_GATEWAY_URL,
-			AGENCY_APP_TOKEN: env.AGENCY_APP_TOKEN,
-		}),
-		...labelArgs({
-			"agency.project": project.id,
-			"agency.role": "app",
-			...routeLabels(`app-${project.slug}`, appHost(project.slug), 3000),
-		}),
-		image,
-	]);
-}
-
 export async function publish(project: Project, userId: string, onLog: (line: string) => void): Promise<Deployment> {
 	if (publishing.has(project.id)) throw new Error("A publish is already running for this app");
 	const bridge = bridgeFor(project);
@@ -112,12 +83,13 @@ export async function publish(project: Project, userId: string, onLog: (line: st
 			[project.id],
 		);
 		const version = (last?.version ?? 0) + 1;
-		const image = `agency-app-${project.slug}:v${version}`;
-		onLog(`Packaging image ${image}`);
-		await buildImage(project, image);
+		const localImage = `agency-app-${project.slug}:v${version}`;
+		onLog(`Packaging image ${localImage}`);
+		await buildImage(project, localImage);
+		const image = await appRuntime.release(project, localImage, version, onLog);
 		await ensureLiveDatabase(project, onLog);
 		onLog(`Starting ${appHost(project.slug)}`);
-		await runApp(project, image);
+		await appRuntime.run(project, image, await publishedEnv(project), onLog);
 		await query("update deployments set active = false where project_id = $1", [project.id]);
 		const deployment = await queryOne<Deployment>(
 			"insert into deployments (project_id, version, image, git_commit, created_by, active) values ($1, $2, $3, $4, $5, true) returning *",
@@ -135,12 +107,12 @@ export async function rollback(project: Project, version: number): Promise<Deplo
 		version,
 	]);
 	if (!target) throw new Error(`Version ${version} not found`);
-	await runApp(project, target.image);
+	await appRuntime.run(project, target.image, await publishedEnv(project), () => {});
 	await query("update deployments set active = (version = $2) where project_id = $1", [project.id, version]);
 	return { ...target, active: true };
 }
 
 export async function unpublish(project: Project): Promise<void> {
-	await docker(["rm", "-f", appContainerName(project)], { allowFailure: true });
+	await appRuntime.stop(project);
 	await query("update deployments set active = false where project_id = $1", [project.id]);
 }

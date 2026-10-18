@@ -8,6 +8,7 @@ import { type AgentEvent, bridgeFor, CHAT_MODES, type ChatMode, dropBridge } fro
 import { type Attachment, checkAttachments, modelImages, promptWithAttachments, saveAttachments } from "./attachments.ts";
 import { AccessError, assertRole, atLeast, getSharing, type ProjectRole, projectRole, setMember, setTeamAccess, slugFromHost, visibleProjects } from "./access.ts";
 import { closeDataPools, DataError, deleteRow, insertRow, listTables, readRows, runSql, updateRow } from "./appdata.ts";
+import { appRuntime } from "./apps.ts";
 import { bedrockApp } from "./bedrock.ts";
 import {
 	type AppEnv,
@@ -44,7 +45,6 @@ import { containerState, execIn } from "./docker.ts";
 import { FileError, listFiles, readFile, writeFile } from "./files.ts";
 import { gateway, mcpApp } from "./gateway.ts";
 import {
-	appContainerName,
 	createProject,
 	type DataEnv,
 	deleteProject,
@@ -102,7 +102,7 @@ function errorMessage(error: unknown): string {
 async function projectView(project: Project, role: ProjectRole | null) {
 	const [sandbox, app, deployments] = await Promise.all([
 		containerState(sandboxName(project)),
-		containerState(appContainerName(project)),
+		appRuntime.running(project),
 		listDeployments(project),
 	]);
 	const active = deployments.find((d) => d.active);
@@ -114,7 +114,7 @@ async function projectView(project: Project, role: ProjectRole | null) {
 		previewUrl: `${config.scheme}://${previewHost(project.slug)}`,
 		appUrl: `${config.scheme}://${appHost(project.slug)}`,
 		sandbox,
-		published: app === "running" && active ? active.version : null,
+		published: app && active ? active.version : null,
 		liveDatabase: Boolean(project.live_db_name),
 		agentRunning: bridgeFor(project).running,
 		role,
@@ -858,6 +858,7 @@ app.get("*", (c) => c.html(indexHtml));
 await migrate();
 await ensureAdmin();
 startIdleSweeper();
+appRuntime.start();
 serve({ fetch: app.fetch, port: config.port }, (info) => {
 	console.log(`agency platform listening on :${info.port} for ${config.publicUrl}`);
 });

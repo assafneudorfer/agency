@@ -32,6 +32,15 @@ The script finds the domain's public Route 53 hosted zone, or offers to create o
 
 On the server, two narrow IAM roles do the work: one can only change records in the hosted zone (Traefik's Let's Encrypt DNS challenge), the other can only call Claude models on Bedrock (the coding agent). The host assumes them every 15 minutes and keeps the one-hour credentials under `/var/lib/agency/aws`. pi gets no keys: its AWS profile asks the platform for the current Bedrock credentials with a per-app token only pi holds, so published apps cannot use Bedrock. Usage and budgets work the same, priced at the model's list price. Bedrock usage is billed on your AWS bill.
 
+### Where published apps run
+
+The first run also asks where published apps run. Sandboxes, the builder and the databases stay on the server either way; only published apps move.
+
+1. **On the server** (default): each published app is a container next to the builder. One machine, nothing else to pay for, and the right choice while a handful of apps get light traffic.
+2. **AWS Fargate**: each published app becomes its own ECS service. A busy app scales from one task up to `app_max_tasks` (default 3) on CPU, a broken one can't take memory from the builder, and the server only builds images. Traefik on the server still handles TLS and sign-in and forwards to the tasks' private addresses, so app URLs and sharing work the same. Each app costs about $13 a month on demand in us-east-1 (0.25 vCPU and 0.5 GB, $9, plus $3.65 for the task's public IPv4 address, which it needs to pull its image without a NAT gateway). Fargate keeps running while the server is stopped, so `./deploy.sh stop` no longer stops the apps' bill, and published apps can't reach their database until the server is back.
+
+Choose by what the organization needs, not its head count: many apps or apps people depend on during the day point to Fargate; a team trying things out is fine on the server. `./deploy.sh use-fargate` switches a running deployment: the platform moves every published app to Fargate with the version it had, one by one, and removes the old containers once the new tasks answer. Publishing, rollback and unpublishing work the same in both modes.
+
 ### Moving a running deployment to all on AWS
 
 `./deploy.sh use-aws` keeps the server, data, address and certificate. It finds or creates the hosted zone, asks for the Bedrock model, adds the records to Route 53 while Cloudflare keeps serving, waits for the registrar change, then removes the Cloudflare records and redeploys. It asks for the Cloudflare token once more to delete the old records. If you stop it while it waits, run it again.
@@ -43,6 +52,7 @@ On the server, two narrow IAM roles do the work: one can only change records in 
 | `./deploy.sh` | First setup, or apply infrastructure changes |
 | `./deploy.sh update` | Redeploy the latest code on the branch |
 | `./deploy.sh use-aws` | Move a Cloudflare + API key server to the all-AWS setup |
+| `./deploy.sh use-fargate` | Run published apps on AWS Fargate from now on (they move over) |
 | `./deploy.sh stop` / `start` / `status` | Stop the server to save money, start it again, show which |
 | `./deploy.sh backup` | Run a database backup now |
 | `./deploy.sh destroy` | Remove everything |
@@ -68,7 +78,7 @@ To save money when nobody is using it, `./deploy.sh stop` stops the server and `
 
 ## What gets created
 
-This creates one EC2 instance (`t3.medium` with 40 GB or `t3.xlarge` with 100 GB, encrypted gp3, plus 4 GB swap) with an Elastic IP, a security group for 80/443, an IAM role for Session Manager, a private S3 bucket for backups, the `.env` as a SecureString in SSM Parameter Store, and two A records (`base_domain` and `*.base_domain`) in Cloudflare or Route 53. With the all-AWS setup it also adds the two runtime IAM roles. Cloudflare records are DNS-only by default: Cloudflare's free edge certificate does not cover a second-level wildcard such as `*.agency.example.com`, while Traefik's Let's Encrypt wildcard does. Set `cloudflare_proxied = true` only if the base domain is the zone apex or the zone has Advanced Certificate Manager.
+This creates one EC2 instance (`t3.medium` with 40 GB or `t3.xlarge` with 100 GB, encrypted gp3, plus 4 GB swap) with an Elastic IP, a security group for 80/443, an IAM role for Session Manager, a private S3 bucket for backups, the `.env` as a SecureString in SSM Parameter Store, and two A records (`base_domain` and `*.base_domain`) in Cloudflare or Route 53. With the all-AWS setup it also adds the two runtime IAM roles. With published apps on Fargate it adds an ECR repository and an ECS cluster for the apps, a log group (`/agency/apps`, 14 days), a security group that lets only the server reach the apps on port 3000 and lets the apps reach Postgres on the server, and two IAM roles: one the server assumes to push images and manage the apps' services and scaling, and one Fargate uses to pull images and write logs. The apps themselves get no IAM role. `./deploy.sh destroy` deletes the apps' services first. Cloudflare records are DNS-only by default: Cloudflare's free edge certificate does not cover a second-level wildcard such as `*.agency.example.com`, while Traefik's Let's Encrypt wildcard does. Set `cloudflare_proxied = true` only if the base domain is the zone apex or the zone has Advanced Certificate Manager.
 
 ## Run locally
 

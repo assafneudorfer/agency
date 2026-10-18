@@ -19,3 +19,8 @@ output "backup_bucket" {
   description = "S3 bucket with the nightly database backups"
   value       = aws_s3_bucket.backups.bucket
 }
+
+output "apps_cluster" {
+  description = "ECS cluster of the published apps, when they run on Fargate"
+  value       = try(aws_ecs_cluster.apps[0].name, null)
+}

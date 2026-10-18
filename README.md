@@ -14,7 +14,8 @@
   <a href="docs/skills.md">Skills</a> ·
   <a href="docs/admin.md">Admin guide</a> ·
   <a href="docs/security.md">Security</a> ·
-  <a href="PLAN.md">Roadmap</a>
+  <a href="PLAN.md">Roadmap</a> ·
+  <a href="LICENSE">MIT license</a>
 </p>
 
 <p align="center">
@@ -29,7 +30,7 @@
 
 ## What is Agency?
 
-Agency is a self-hosted, open source app builder for the people inside one organization, in the spirit of Lovable and Base44, but running on your own server and wired to your own data.
+Agency is a self-hosted, open source (MIT) app builder for the people inside one organization, in the spirit of Lovable and Base44, but running on your own server and wired to your own data.
 
 Someone types what they need. The [pi](https://github.com/earendil-works/pi) coding agent builds it as a Next.js app in a sandbox container, the live preview updates beside the chat, and one click publishes it to `https://<app>.<your-domain>` for the rest of the team. Apps read the organization's data (Postgres, Supabase, Google Drive, Salesforce, monday.com, any MCP server) through a gateway, so credentials never end up in generated code.
 
@@ -254,3 +255,7 @@ npm run typecheck
 ## Built with
 
 [pi](https://github.com/earendil-works/pi) (the coding agent), [Hono](https://hono.dev), [Preact](https://preactjs.com) and [htm](https://github.com/developit/htm), [CodeMirror](https://codemirror.net), [Next.js](https://nextjs.org), [Traefik](https://traefik.io), [PostgreSQL](https://www.postgresql.org), the [Model Context Protocol](https://modelcontextprotocol.io) and [Agent Skills](https://agentskills.io). Axel, the mascot, was drawn with Higgsfield.
+
+## License
+
+Agency is released under the [MIT license](LICENSE).

@@ -68,6 +68,8 @@ services:
       AGENCY_DEFAULT_BUDGET_USD: ${AGENCY_DEFAULT_BUDGET_USD:-20}
       AGENCY_SANDBOX_MEMORY: ${AGENCY_SANDBOX_MEMORY:-3g}
       AGENCY_SANDBOX_CPUS: ${AGENCY_SANDBOX_CPUS:-2}
+      AGENCY_PI_IDLE_MINUTES: ${AGENCY_PI_IDLE_MINUTES:-10}
+      AGENCY_SANDBOX_IDLE_MINUTES: ${AGENCY_SANDBOX_IDLE_MINUTES:-30}
       DATABASE_URL: postgres://agency:${POSTGRES_PASSWORD}@postgres:5432/agency
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -82,7 +84,15 @@ services:
       traefik.enable: "true"
       traefik.http.routers.platform.rule: Host(`${AGENCY_BASE_DOMAIN}`)
       traefik.http.routers.platform.entrypoints: app
+      traefik.http.routers.platform.service: platform
       traefik.http.services.platform.loadbalancer.server.port: "8080"
+      # Fallback for previews of apps whose sandbox is asleep (stopped containers have no route):
+      # the platform starts the sandbox and reloads the page. Lowest priority, so a running sandbox wins.
+      traefik.http.routers.platform-wake.rule: HostRegexp(`^[a-z0-9-]+-preview\.${AGENCY_BASE_DOMAIN}$$`)
+      traefik.http.routers.platform-wake.priority: "1"
+      traefik.http.routers.platform-wake.entrypoints: app
+      traefik.http.routers.platform-wake.middlewares: agency-auth@docker
+      traefik.http.routers.platform-wake.service: platform
     networks: [agency]
     restart: unless-stopped
 

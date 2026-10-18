@@ -43,6 +43,9 @@ export const config = {
 	sandboxMemory: optional("AGENCY_SANDBOX_MEMORY", "3g"),
 	sandboxCpus: optional("AGENCY_SANDBOX_CPUS", "2"),
 	appMemory: optional("AGENCY_APP_MEMORY", "512m"),
+	// Minutes without use before an app's agent process ends, and before its sandbox container stops. 0 keeps them running.
+	piIdleMinutes: Number(optional("AGENCY_PI_IDLE_MINUTES", "10")),
+	sandboxIdleMinutes: Number(optional("AGENCY_SANDBOX_IDLE_MINUTES", "30")),
 	webRoot: new URL("../web/", import.meta.url).pathname,
 	nodeModules: new URL("../node_modules/", import.meta.url).pathname,
 };

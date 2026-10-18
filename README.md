@@ -197,7 +197,7 @@ open http://localtest.me
 ```
 
 - **Platform** (`platform/`): Node 22 and Hono, TypeScript run directly by Node, and a Preact + htm UI with no build step. It manages people, apps, connections and deployments, and drives Docker.
-- **Sandbox** (`sandbox/`): one container per app with a Next.js template and pi from npm (pinned by `PI_VERSION`). The platform runs `pi --mode rpc` inside it and streams its events to the browser.
+- **Sandbox** (`sandbox/`): one container per app with a Next.js template and pi from npm (pinned by `PI_VERSION`). The platform runs `pi --mode rpc` inside it and streams its events to the browser. Apps nobody is using go to sleep and wake when opened.
 - **Gateway**: the only way apps and the agent reach organization data. It holds the credentials and checks which apps may use each connection.
 - **Traefik**: TLS and routing for the platform, every preview and every published app, with a sign-in check in front of all of them.
 

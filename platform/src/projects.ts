@@ -178,6 +178,10 @@ export async function projectByToken(token: string): Promise<Project | undefined
 	return queryOne<Project>("select * from projects where token = $1", [token]);
 }
 
+export async function getProjectBySlug(slug: string): Promise<Project | undefined> {
+	return queryOne<Project>("select * from projects where slug = $1", [slug]);
+}
+
 export async function listProjects(): Promise<Project[]> {
 	return query<Project>("select * from projects order by created_at desc");
 }

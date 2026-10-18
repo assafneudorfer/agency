@@ -13,7 +13,7 @@ import { config } from "./config.ts";
 import { randomToken } from "./crypto.ts";
 import { query } from "./db.ts";
 import { execArgv } from "./docker.ts";
-import { getProject, type Project, sandboxName } from "./projects.ts";
+import { ensureSandbox, getProject, type Project, sandboxName } from "./projects.ts";
 import { deleteSetting, getSetting, putSetting } from "./settings.ts";
 
 interface Common {
@@ -349,6 +349,8 @@ export async function pushToGitHub(project: Project, options: { force?: boolean 
 	pushing.add(project.id);
 	const dir = await mkdtemp(join(tmpdir(), "agency-push-"));
 	try {
+		// Auto-push can run for an app whose sandbox is asleep.
+		await ensureSandbox(project);
 		const bundle = await execArgv(sandboxName(project), ["git", "bundle", "create", "-", "main"], { timeoutMs: 120_000 });
 		if (bundle.code !== 0 || bundle.stdout.length === 0) throw new GitHubError(`Couldn't read the app's history: ${bundle.stderr.trim() || "empty bundle"}`);
 		await writeFile(join(dir, "app.bundle"), bundle.stdout);

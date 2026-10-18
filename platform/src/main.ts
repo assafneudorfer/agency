@@ -6,7 +6,7 @@ import { compress } from "hono/compress";
 import { streamSSE } from "hono/streaming";
 import { type AgentEvent, bridgeFor, CHAT_MODES, type ChatMode, dropBridge } from "./agent.ts";
 import { type Attachment, checkAttachments, modelImages, promptWithAttachments, saveAttachments } from "./attachments.ts";
-import { AccessError, assertRole, atLeast, getSharing, type ProjectRole, projectRole, setMember, setTeamAccess, visibleProjects } from "./access.ts";
+import { AccessError, assertRole, atLeast, getSharing, type ProjectRole, projectRole, setMember, setTeamAccess, slugFromHost, visibleProjects } from "./access.ts";
 import { closeDataPools, DataError, deleteRow, insertRow, listTables, readRows, runSql, updateRow } from "./appdata.ts";
 import { bedrockApp } from "./bedrock.ts";
 import {
@@ -25,6 +25,7 @@ import {
 	verifyForwardAuth,
 } from "./auth.ts";
 import { appHost, config, previewHost } from "./config.ts";
+import { startIdleSweeper, touch, waitForDevServer, wake, watch } from "./idle.ts";
 import {
 	CONNECTION_KINDS,
 	type ConnectionConfig,
@@ -49,6 +50,7 @@ import {
 	deleteProject,
 	ensureSandbox,
 	getProject,
+	getProjectBySlug,
 	listProjects,
 	type Project,
 	sandboxName,
@@ -135,6 +137,41 @@ app.onError((error, c) => {
 });
 
 app.get("/healthz", (c) => c.text("ok"));
+
+// A sleeping app's preview has no route of its own while its sandbox is stopped, so Traefik's fallback
+// router (platform-wake in docker-compose.yml) sends the request here. This starts the sandbox, shows a
+// short "starting" page, and reloads into the app once its dev server answers.
+app.use("*", async (c, next) => {
+	const host = (c.req.header("Host") ?? "").split(":")[0].toLowerCase();
+	if (!host.endsWith(`-preview.${config.baseDomain}`)) return next();
+	const slug = slugFromHost(host, config.baseDomain);
+	const project = slug ? await getProjectBySlug(slug) : undefined;
+	const user = await currentUser(c);
+	if (!user) return c.redirect(`${config.publicUrl}/?next=${encodeURIComponent(`${config.scheme}://${host}${c.req.path}`)}`, 302);
+	if (!project || !(await projectRole(user, project))) return c.text("App not found", 404);
+	const name = project.name.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+	const encoder = new TextEncoder();
+	const body = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			controller.enqueue(
+				encoder.encode(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Starting ${name}</title>
+<body style="font:15px system-ui;margin:20vh auto;max-width:28rem;padding:0 16px;text-align:center;color:#555">
+<p>Starting ${name}…</p><p style="font-size:13px">It was asleep after a while without use. This takes a few seconds.</p>
+`),
+			);
+			let ready = false;
+			try {
+				await wake(project);
+				ready = await waitForDevServer(project);
+			} catch (error) {
+				console.error(`[idle] ${project.slug}: could not wake: ${errorMessage(error)}`);
+			}
+			controller.enqueue(encoder.encode(ready ? "<script>location.reload()</script>" : "<p>It is taking longer than usual. <a href=\"\">Try again</a></p>"));
+			controller.close();
+		},
+	});
+	return c.body(body, 503, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+});
 app.get("/auth/verify", (c) => verifyForwardAuth(c));
 app.route("/gateway", gateway);
 app.route("/mcp", mcpApp);
@@ -258,7 +295,15 @@ async function projectFor(c: ProjectContext, needed: ProjectRole): Promise<{ pro
 	const project = await getProject(c.req.param("id"));
 	if (!project) throw new NotFoundError("App not found");
 	const role = await assertRole(c.get("user"), project, needed);
+	touch(project.id);
 	return { project, role };
+}
+
+/** Like projectFor, for routes that work inside the sandbox: starts it if the app was asleep. */
+async function sandboxFor(c: ProjectContext, needed: ProjectRole): Promise<{ project: Project; role: ProjectRole }> {
+	const found = await projectFor(c, needed);
+	await wake(found.project);
+	return found;
 }
 
 api.get("/projects", async (c) => {
@@ -333,7 +378,7 @@ api.get("/projects/:id/messages", async (c) => {
  * `mode` is auto (build), plan or chat; `model` is a catalog key, used if an admin allowed it.
  */
 api.post("/projects/:id/prompt", async (c) => {
-	const { project } = await projectFor(c, "editor");
+	const { project } = await sandboxFor(c, "editor");
 	let fields: Record<string, unknown>;
 	const files: Attachment[] = [];
 	if ((c.req.header("Content-Type") ?? "").startsWith("multipart/form-data")) {
@@ -371,7 +416,11 @@ api.get("/projects/:id/events", async (c) => {
 			queue.push(event);
 			wake?.();
 		});
-		stream.onAbort(unsubscribe);
+		const unwatch = watch(project.id);
+		stream.onAbort(() => {
+			unsubscribe();
+			unwatch();
+		});
 		await stream.writeSSE({ event: "hello", data: JSON.stringify({ running: bridge.running }) });
 		while (!stream.aborted) {
 			if (queue.length === 0) {
@@ -389,6 +438,7 @@ api.get("/projects/:id/events", async (c) => {
 			await stream.writeSSE({ data: JSON.stringify(event) });
 		}
 		unsubscribe();
+		unwatch();
 	});
 });
 
@@ -401,13 +451,13 @@ api.post("/projects/:id/restart", async (c) => {
 });
 
 api.get("/projects/:id/logs", async (c) => {
-	const { project } = await projectFor(c, "viewer");
+	const { project } = await sandboxFor(c, "viewer");
 	const result = await execIn(sandboxName(project), "tail -n 200 /tmp/dev.log 2>/dev/null || true");
 	return c.text(result.stdout);
 });
 
 api.get("/projects/:id/versions", async (c) => {
-	const { project } = await projectFor(c, "viewer");
+	const { project } = await sandboxFor(c, "viewer");
 	const result = await execIn(sandboxName(project), "git log -n 50 --format='%h%x09%cI%x09%s'");
 	const versions = result.stdout
 		.split("\n")
@@ -420,7 +470,7 @@ api.get("/projects/:id/versions", async (c) => {
 });
 
 api.post("/projects/:id/restore", async (c) => {
-	const { project } = await projectFor(c, "editor");
+	const { project } = await sandboxFor(c, "editor");
 	const { commit } = await c.req.json<{ commit: string }>();
 	if (!/^[0-9a-f]{4,40}$/.test(commit ?? "")) return c.json({ error: "Invalid version" }, 400);
 	if (bridgeFor(project).running) return c.json({ error: "Wait for the agent to finish first" }, 409);
@@ -441,13 +491,12 @@ git rev-parse --short HEAD`;
 // Code view: the app's source files inside its sandbox
 
 api.get("/projects/:id/files", async (c) => {
-	const { project } = await projectFor(c, "viewer");
-	await ensureSandbox(project);
+	const { project } = await sandboxFor(c, "viewer");
 	return c.json({ files: await listFiles(project) });
 });
 
 api.get("/projects/:id/file", async (c) => {
-	const { project } = await projectFor(c, "viewer");
+	const { project } = await sandboxFor(c, "viewer");
 	try {
 		return c.json(await readFile(project, c.req.query("path") ?? ""));
 	} catch (error) {
@@ -457,7 +506,7 @@ api.get("/projects/:id/file", async (c) => {
 });
 
 api.put("/projects/:id/file", async (c) => {
-	const { project } = await projectFor(c, "editor");
+	const { project } = await sandboxFor(c, "editor");
 	const body = await c.req.json<{ path: string; content: string }>();
 	if (typeof body.content !== "string") return c.json({ error: "Content is required" }, 400);
 	// The agent commits its whole tree when it settles; a save in the middle of a run would get mixed into it.
@@ -536,7 +585,7 @@ api.get("/projects/:id/deployments", async (c) => {
 });
 
 api.post("/projects/:id/publish", async (c) => {
-	const { project } = await projectFor(c, "editor");
+	const { project } = await sandboxFor(c, "editor");
 	const user = c.get("user");
 	return streamSSE(c, async (stream) => {
 		try {
@@ -597,7 +646,7 @@ api.delete("/projects/:id/github", async (c) => {
 });
 
 api.post("/projects/:id/github/push", async (c) => {
-	const { project } = await projectFor(c, "editor");
+	const { project } = await sandboxFor(c, "editor");
 	if (bridgeFor(project).running) return c.json({ error: "Wait for the agent to finish, then push" }, 409);
 	const body = await c.req.json<{ force?: boolean }>().catch(() => ({ force: false }));
 	return c.json(await pushToGitHub(project, { force: Boolean(body.force) }));
@@ -808,6 +857,7 @@ app.get("*", (c) => c.html(indexHtml));
 
 await migrate();
 await ensureAdmin();
+startIdleSweeper();
 serve({ fetch: app.fetch, port: config.port }, (info) => {
 	console.log(`agency platform listening on :${info.port} for ${config.publicUrl}`);
 });

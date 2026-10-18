@@ -43,7 +43,7 @@ These are on-demand prices in us-east-1. Quote them as estimates, and point to `
 | Disk (gp3) | $0.08 per GB a month: 40 GB on small, 100 GB on standard |
 | Public IPv4 address (server, each apps server, and each Fargate task) | $3.65 a month each, or $0.005 an hour |
 | Backups in S3 and logs | About $1 a month |
-| Server stopped (`./deploy.sh stop`) | Disk and IP only: about $7 small, $12 standard |
+| Server stopped (`./deploy.sh stop`) | Disk and IP only: about $7 small, $12 standard. Stop also stops dev environments, published apps and apps servers in the cluster; start brings them back. |
 | Dev environment on Fargate Spot (1 vCPU, 3 GB) | About $0.021 an hour while awake. Regular Fargate is about $0.059 an hour (`sandbox_spot = false`). |
 | Workspaces on EFS | $0.30 per GB a month; an app is usually under 50 MB |
 | Apps server (t3.medium, 30 GB disk, public IP) | About $36.42 a month, holds about 14 small published apps. At least one runs; more start when full (up to 4 by default). |

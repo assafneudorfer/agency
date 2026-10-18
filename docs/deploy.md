@@ -53,7 +53,7 @@ Size Agency by how your organization will use it, not by head count: how many ap
 
 Fargate is the most isolated choice and costs the most for many small apps; the shared apps servers cost far less once there are more than three or four apps. Keeping published apps on the Agency server is free until its memory runs out.
 
-**With the server stopped**, published apps on the apps servers or Fargate keep running (and billing), but they can't be reached, since Traefik runs on the server. `./deploy.sh stop` stops all dev environments first, since no platform is left to put them to sleep.
+**With the server stopped**, nothing in the cluster runs either. `./deploy.sh stop` sets every published app to zero tasks (pausing its autoscaling) and lets the apps servers shrink to none, then stops all dev environments, since no platform is left to put them to sleep. `./deploy.sh start` brings the apps servers and each app's task back before the server, so published apps answer again a few minutes later. While stopped you pay only for disks, the server's address, EFS and stored images. 
 
 **Changing profile.** `./deploy.sh profile` asks again and applies the change. Moving dev environments to Fargate copies each app's workspace to EFS the first time someone opens it; moving published apps to the cluster moves each one with the version it had, and removes the old container once the new task answers. Moving either back to the server, or published apps between the apps servers and Fargate, isn't supported yet. A bigger server keeps its address and data; a smaller one keeps its larger disk, since disks can't shrink.
 

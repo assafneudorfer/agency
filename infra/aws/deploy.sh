@@ -502,6 +502,47 @@ stop_sandboxes() {
 	done
 }
 
+# Published apps in the cluster can't be reached while the server is stopped, so they stop with it:
+# each service goes to zero tasks with its autoscaling paused, and the apps servers' group may shrink to
+# none (ECS drains and removes them once they're empty). start_apps undoes both.
+app_services() {
+	aws ecs list-services --region "$(region)" --cluster "$1" --query 'serviceArns[]' --output text | tr '\t' '\n' | sed -n 's|.*/||p'
+}
+
+stop_apps() {
+	local cluster group
+	cluster=$(terraform output -raw cluster 2>/dev/null || true)
+	[ -n "$cluster" ] && [ "$cluster" != "null" ] || return 0
+	info "Stopping published apps in the cluster"
+	for service in $(app_services "$cluster"); do
+		aws application-autoscaling register-scalable-target --region "$(region)" --service-namespace ecs \
+			--resource-id "service/$cluster/$service" --scalable-dimension ecs:service:DesiredCount --min-capacity 0 \
+			--suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=true >/dev/null 2>&1 || true
+		aws ecs update-service --region "$(region)" --cluster "$cluster" --service "$service" --desired-count 0 >/dev/null
+	done
+	group=$(terraform output -raw apps_servers 2>/dev/null || true)
+	if [ -n "$group" ] && [ "$group" != "null" ]; then
+		aws autoscaling update-auto-scaling-group --region "$(region)" --auto-scaling-group-name "$group" --min-size 0 --desired-capacity 0
+	fi
+}
+
+start_apps() {
+	local cluster group
+	cluster=$(terraform output -raw cluster 2>/dev/null || true)
+	[ -n "$cluster" ] && [ "$cluster" != "null" ] || return 0
+	info "Starting published apps in the cluster"
+	group=$(terraform output -raw apps_servers 2>/dev/null || true)
+	if [ -n "$group" ] && [ "$group" != "null" ]; then
+		aws autoscaling update-auto-scaling-group --region "$(region)" --auto-scaling-group-name "$group" --min-size 1
+	fi
+	for service in $(app_services "$cluster"); do
+		aws ecs update-service --region "$(region)" --cluster "$cluster" --service "$service" --desired-count 1 >/dev/null
+		aws application-autoscaling register-scalable-target --region "$(region)" --service-namespace ecs \
+			--resource-id "service/$cluster/$service" --scalable-dimension ecs:service:DesiredCount --min-capacity 1 \
+			--suspended-state DynamicScalingInSuspended=false,DynamicScalingOutSuspended=false,ScheduledScalingSuspended=false >/dev/null 2>&1 || true
+	done
+}
+
 delete_app_services() {
 	local cluster
 	cluster=$(terraform output -raw cluster 2>/dev/null || true)
@@ -536,6 +577,7 @@ costs)
 stop)
 	check_aws
 	info "Stopping the server (disk, Elastic IP and DNS records are kept)"
+	stop_apps
 	stop_sandboxes
 	aws ec2 stop-instances --region "$(region)" --instance-ids "$(terraform output -raw instance_id)" >/dev/null
 	aws ec2 wait instance-stopped --region "$(region)" --instance-ids "$(terraform output -raw instance_id)"
@@ -543,6 +585,7 @@ stop)
 	;;
 start)
 	check_aws
+	start_apps
 	info "Starting the server"
 	aws ec2 start-instances --region "$(region)" --instance-ids "$(terraform output -raw instance_id)" >/dev/null
 	aws ec2 wait instance-running --region "$(region)" --instance-ids "$(terraform output -raw instance_id)"

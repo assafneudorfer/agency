@@ -29,7 +29,7 @@ Rules of thumb:
 
 - A sandbox takes up to 3 GB of memory while someone builds in it. That is what fills a server, not the number of accounts.
 - Idle apps sleep in every profile after 30 minutes. On the server that frees memory; on Fargate it also stops the bill for that app.
-- Published apps nobody opens for a week (`app_idle_days`) go offline and their owner gets an email; the next visit starts them. That keeps apps servers from filling up with forgotten apps. Email needs SES (all on AWS; ask them to request SES production access) or an SMTP server in Settings > Email.
+- Published apps nobody opens for a week (`app_idle_days`) go offline and their owner gets an email; the next visit starts them. That keeps apps servers from filling up with forgotten apps, and the platform drains a server when its apps fit on the others, so the count of apps servers follows the apps that are actually up. Email needs SES (all on AWS; ask them to request SES production access) or an SMTP server in Settings > Email.
 - Published apps on the server are free until the server runs out of memory. On apps servers they cost about $36 a month per server of about 14 apps (about $2.60 an app when full), can't affect the builder, and a new server starts when they're full. On Fargate each app costs about $13 a month on its own; suggest it only when apps must be isolated from each other.
 - If the person isn't sure, recommend **Try it out**. `./deploy.sh profile` can move to Team or Organization later without losing data. Moving dev environments or published apps from the cluster back to the server isn't supported yet, so don't start on the cluster "just in case".
 

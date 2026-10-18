@@ -380,10 +380,12 @@ resource "aws_iam_role_policy" "cluster" {
       },
       {
         Effect    = "Allow"
-        Action    = ["ecs:StopTask", "ecs:ListTasks", "ecs:DescribeTasks", "ecs:DescribeContainerInstances"]
+        Action    = ["ecs:StopTask", "ecs:ListTasks", "ecs:DescribeTasks", "ecs:DescribeContainerInstances", "ecs:UpdateContainerInstancesState"]
         Resource  = "*"
         Condition = { ArnEquals = { "ecs:cluster" = local.cluster_arn } }
       },
+      # Draining an apps server whose apps fit on the others, so ECS can remove it (platform/src/fargate.ts).
+      { Effect = "Allow", Action = ["ecs:ListContainerInstances"], Resource = local.cluster_arn },
       # The apps servers' private addresses, for routes to the apps on them.
       { Effect = "Allow", Action = ["ec2:DescribeInstances"], Resource = "*" },
       # Task definitions can't be limited by family in IAM; they only describe what a task may run.

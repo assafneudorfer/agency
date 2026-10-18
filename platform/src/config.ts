@@ -45,22 +45,39 @@ export const config = {
 	appMemory: optional("AGENCY_APP_MEMORY", "512m"),
 	// Where published apps run: "docker" (containers on this server) or "fargate" (an ECS service per app).
 	appRuntime: optional("AGENCY_APP_RUNTIME", "docker") as "docker" | "fargate",
-	fargate: {
+	// Where sandboxes run: "docker" (containers on this server) or "fargate" (an ECS task per app that
+	// runs while someone builds, with its workspace on EFS).
+	sandboxRuntime: optional("AGENCY_SANDBOX_RUNTIME", "docker") as "docker" | "fargate",
+	// The ECS cluster both use when they run on AWS.
+	ecs: {
 		cluster: process.env.AGENCY_ECS_CLUSTER ?? "",
-		repository: process.env.AGENCY_ECR_REPOSITORY ?? "",
 		subnets: (process.env.AGENCY_ECS_SUBNETS ?? "").split(",").filter(Boolean),
-		securityGroup: process.env.AGENCY_ECS_SECURITY_GROUP ?? "",
 		executionRoleArn: process.env.AGENCY_ECS_EXECUTION_ROLE_ARN ?? "",
 		logGroup: process.env.AGENCY_ECS_LOG_GROUP ?? "",
-		// Short-lived keys for the apps role, refreshed by the host (infra/aws/host/agency-aws-credentials).
-		credentialsFile: process.env.AGENCY_APPS_CREDENTIALS_FILE ?? "",
-		// This server's private address: published apps reach their database here.
-		databaseHost: process.env.AGENCY_HOST_PRIVATE_IP ?? "",
+		// Short-lived keys for the cluster role, refreshed by the host (infra/aws/host/agency-aws-credentials).
+		credentialsFile: optional("AGENCY_CLUSTER_CREDENTIALS_FILE", "/aws-cluster/credentials.json"),
+		// This server's private address: tasks reach Postgres here.
+		hostPrivateIp: process.env.AGENCY_HOST_PRIVATE_IP ?? "",
+		// Where Traefik reads routes to tasks (its file provider watches this directory).
+		routesDir: optional("AGENCY_TRAEFIK_DYNAMIC_DIR", "/traefik-dynamic"),
+	},
+	fargate: {
+		repository: process.env.AGENCY_APPS_ECR_REPOSITORY ?? "",
+		securityGroup: process.env.AGENCY_APPS_SECURITY_GROUP ?? "",
 		cpu: optional("AGENCY_APP_CPU", "256"),
 		memoryMb: optional("AGENCY_APP_MEMORY_MB", "512"),
 		maxTasks: Number(optional("AGENCY_APP_MAX_TASKS", "3")),
-		// Where Traefik reads the routes to apps on Fargate (its file provider watches this directory).
-		routesDir: optional("AGENCY_TRAEFIK_DYNAMIC_DIR", "/traefik-dynamic"),
+	},
+	sandboxFargate: {
+		repository: process.env.AGENCY_SANDBOX_ECR_REPOSITORY ?? "",
+		securityGroup: process.env.AGENCY_SANDBOX_SECURITY_GROUP ?? "",
+		cpu: optional("AGENCY_SANDBOX_TASK_CPU", "1024"),
+		memoryMb: optional("AGENCY_SANDBOX_TASK_MEMORY_MB", "3072"),
+		// Fargate Spot costs about 70% less; AWS may stop a task with two minutes' notice (the workspace stays).
+		spot: optional("AGENCY_SANDBOX_SPOT", "true") === "true",
+		efsId: process.env.AGENCY_EFS_ID ?? "",
+		// The EFS file system mounted on this server, at the same path inside the platform container.
+		efsDir: optional("AGENCY_EFS_DIR", "/mnt/agency-efs"),
 	},
 	// Minutes without use before an app's agent process ends, and before its sandbox container stops. 0 keeps them running.
 	piIdleMinutes: Number(optional("AGENCY_PI_IDLE_MINUTES", "10")),

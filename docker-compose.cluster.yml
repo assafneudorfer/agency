@@ -1,0 +1,33 @@
+# Published apps and/or sandboxes on an ECS cluster (AWS Fargate): the platform pushes images to ECR and
+# runs them as ECS services (apps) and tasks (sandboxes); Traefik routes to the tasks from the files the
+# platform writes. infra/aws adds this file through COMPOSE_FILE in .env.
+#
+# No stored keys: the host assumes the cluster role and refreshes its short-lived credentials under
+# /var/lib/agency/aws/cluster (infra/aws/host/agency-aws-credentials).
+services:
+  postgres:
+    # Databases for apps and sandboxes on Fargate, reachable from their security groups only (infra/aws/cluster.tf).
+    ports:
+      - "5432:5432"
+  platform:
+    environment:
+      AGENCY_APP_RUNTIME: ${AGENCY_APP_RUNTIME:-docker}
+      AGENCY_SANDBOX_RUNTIME: ${AGENCY_SANDBOX_RUNTIME:-docker}
+      AGENCY_AWS_REGION: ${AGENCY_AWS_REGION:-us-east-1}
+      AGENCY_CLUSTER_CREDENTIALS_FILE: /aws-cluster/credentials.json
+      AGENCY_ECS_CLUSTER: ${AGENCY_ECS_CLUSTER:?set AGENCY_ECS_CLUSTER in .env}
+      AGENCY_ECS_SUBNETS: ${AGENCY_ECS_SUBNETS:?set AGENCY_ECS_SUBNETS in .env}
+      AGENCY_ECS_EXECUTION_ROLE_ARN: ${AGENCY_ECS_EXECUTION_ROLE_ARN:?set AGENCY_ECS_EXECUTION_ROLE_ARN in .env}
+      AGENCY_ECS_LOG_GROUP: ${AGENCY_ECS_LOG_GROUP:?set AGENCY_ECS_LOG_GROUP in .env}
+      AGENCY_HOST_PRIVATE_IP: ${AGENCY_HOST_PRIVATE_IP:?set AGENCY_HOST_PRIVATE_IP in .env (infra/aws/host/setup.sh)}
+      AGENCY_APPS_ECR_REPOSITORY: ${AGENCY_APPS_ECR_REPOSITORY:-}
+      AGENCY_APPS_SECURITY_GROUP: ${AGENCY_APPS_SECURITY_GROUP:-}
+      AGENCY_APP_MAX_TASKS: ${AGENCY_APP_MAX_TASKS:-3}
+      AGENCY_SANDBOX_ECR_REPOSITORY: ${AGENCY_SANDBOX_ECR_REPOSITORY:-}
+      AGENCY_SANDBOX_SECURITY_GROUP: ${AGENCY_SANDBOX_SECURITY_GROUP:-}
+      AGENCY_SANDBOX_SPOT: ${AGENCY_SANDBOX_SPOT:-true}
+      AGENCY_EFS_ID: ${AGENCY_EFS_ID:-}
+    volumes:
+      - /var/lib/agency/aws/cluster:/aws-cluster:ro
+      # Same path inside and out: the platform passes workspace paths to `docker run -v` when it moves them.
+      - /mnt/agency-efs:/mnt/agency-efs

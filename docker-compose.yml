@@ -11,7 +11,7 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=agency
-      # Routes the platform writes for published apps that run elsewhere (AWS Fargate).
+      # Routes the platform writes for published apps and sandboxes on AWS Fargate.
       - --providers.file.directory=/dynamic
       - --providers.file.watch=true
       - --entrypoints.http.address=:80

@@ -20,7 +20,7 @@ output "backup_bucket" {
   value       = aws_s3_bucket.backups.bucket
 }
 
-output "apps_cluster" {
-  description = "ECS cluster of the published apps, when they run on Fargate"
-  value       = try(aws_ecs_cluster.apps[0].name, null)
+output "cluster" {
+  description = "ECS cluster of the published apps and sandboxes, when either runs on Fargate"
+  value       = try(aws_ecs_cluster.agency[0].name, null)
 }

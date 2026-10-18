@@ -6,7 +6,8 @@
 #   ./deploy.sh            create or update the stack (asks for anything it needs)
 #   ./deploy.sh update     pull the latest code on the server and rebuild
 #   ./deploy.sh use-aws    move a Cloudflare + Claude API key deployment to all on AWS
-#   ./deploy.sh use-fargate  run published apps on AWS Fargate instead of the server (they move over)
+#   ./deploy.sh profile    change how Agency runs (one server, a bigger server, or AWS Fargate)
+#   ./deploy.sh costs      what the current setup costs a month, and what the other profiles would
 #   ./deploy.sh stop       stop the server to save money (data, address and DNS stay)
 #   ./deploy.sh start      start it again; the stack comes back on its own
 #   ./deploy.sh status     show whether the server is running
@@ -60,7 +61,7 @@ request_with_header() {
 # Reads a value from the settings file, or prints the default.
 setting() {
 	local value=""
-	[ -f "$SETTINGS" ] && value=$(grep -E "^$1 " "$SETTINGS" | cut -d'"' -f2 || true)
+	[ -f "$SETTINGS" ] && value=$(grep -E "^$1 " "$SETTINGS" | sed -E 's/^[^=]*= *"?([^"]*)"?.*/\1/' || true)
 	printf '%s' "${value:-${2:-}}"
 }
 
@@ -170,6 +171,65 @@ bedrock_default_model() {
 	printf 'amazon-bedrock/%s.anthropic.claude-opus-4-8' "$prefix"
 }
 
+# Profiles size Agency by how the organization uses it, not by head count: how many apps get built at
+# the same time, and how much the published ones are relied on. Prices are on-demand us-east-1.
+choose_profile() {
+	echo
+	echo "How will your organization use Agency? (change it later with ./deploy.sh profile)"
+	echo "  1) Try it out: one small server runs everything. About 2 apps built at the same"
+	echo "     time and a handful of light published apps.                   about \$37 a month"
+	echo "  2) Team: one larger server runs everything. About 4 apps built at the same time"
+	echo "     and a dozen published apps.                                  about \$133 a month"
+	echo "  3) Organization: a small server for the platform; every app's dev environment and"
+	echo "     every published app on AWS Fargate. Dev environments run only while someone"
+	echo "     builds and sleep when idle; published apps scale with traffic. No limit on how"
+	echo "     many build at once.      about \$37 a month + 2 to 6 cents an hour per app being"
+	echo "                              built + about \$13 a month per published app"
+	echo "  4) Custom: choose the server size and where dev environments and published apps run"
+	ask PROFILE "Choose 1, 2, 3 or 4" "1"
+	case "$PROFILE" in
+	1) PROFILE=try SIZE=small SANDBOX_RUNTIME=docker APP_RUNTIME=docker ;;
+	2) PROFILE=team SIZE=standard SANDBOX_RUNTIME=docker APP_RUNTIME=docker ;;
+	3) PROFILE=organization SIZE=small SANDBOX_RUNTIME=fargate APP_RUNTIME=fargate ;;
+	4)
+		PROFILE=custom
+		ask SIZE "Server size: small (t3.medium, 4 GB) or standard (t3.xlarge, 16 GB)" "small"
+		ask SANDBOX_RUNTIME "Dev environments: docker (on the server) or fargate (sleep when idle, pay per hour)" "docker"
+		ask APP_RUNTIME "Published apps: docker (on the server) or fargate (own service each, scales)" "docker"
+		;;
+	*) fail "Choose 1, 2, 3 or 4" ;;
+	esac
+	case "$SIZE $SANDBOX_RUNTIME $APP_RUNTIME" in
+	small\ * | standard\ *) ;;
+	*) fail "Server size must be small or standard" ;;
+	esac
+	for runtime in "$SANDBOX_RUNTIME" "$APP_RUNTIME"; do
+		[ "$runtime" = docker ] || [ "$runtime" = fargate ] || fail "Choose docker or fargate"
+	done
+}
+
+# Terraform settings for the chosen profile. On Fargate a dev environment gets its own 1 vCPU and 3 GB,
+# so the server's per-sandbox limits only matter for sandboxes on the server.
+profile_settings() {
+	local instance_type=t3.medium sandbox_memory=1500m sandbox_cpus=1 volume=40
+	if [ "$SIZE" = "standard" ]; then
+		instance_type=t3.xlarge sandbox_memory=3g sandbox_cpus=2 volume=100
+	fi
+	# A disk can grow but not shrink.
+	local current_volume
+	current_volume=$(setting volume_size_gb 0)
+	[ "$current_volume" -gt "$volume" ] 2>/dev/null && volume=$current_volume
+	cat <<EOF
+# profile: $PROFILE
+instance_type      = "$instance_type"
+volume_size_gb     = $volume
+sandbox_memory     = "$sandbox_memory"
+sandbox_cpus       = "$sandbox_cpus"
+sandbox_runtime    = "$SANDBOX_RUNTIME"
+app_runtime        = "$APP_RUNTIME"
+EOF
+}
+
 write_settings() {
 	if [ -f "$SETTINGS" ]; then
 		info "Using settings in $SETTINGS (delete it to start over)"
@@ -179,19 +239,8 @@ write_settings() {
 	ask BASE_DOMAIN "Domain for Agency, e.g. agency.example.com"
 	ask ADMIN_EMAIL "Admin email (sign-in and Let's Encrypt)"
 	ask AWS_REGION_CHOICE "AWS region" "${AWS_REGION:-us-east-1}"
-	ask SIZE "Instance size: small (t3.medium, for testing) or standard (t3.xlarge)" "small"
 	ask REPO_REF "Git branch to deploy" "main"
-	echo "Where should published apps run?"
-	echo "  1) On the Agency server, next to the builder (simplest, one machine)"
-	echo "  2) AWS Fargate: each app its own service that scales with traffic, isolated from the builder"
-	echo "     (about \$13 a month per published app: 0.25 vCPU, 0.5 GB and a public IPv4 address)"
-	ask APPS_CHOICE "Choose 1 or 2" "1"
-	case "$APPS_CHOICE" in
-	1) APP_RUNTIME=docker ;;
-	2) APP_RUNTIME=fargate ;;
-	*) fail "Choose 1 or 2" ;;
-	esac
-
+	choose_profile
 	local dns_settings model=""
 	if [ "$DNS_PROVIDER" = "route53" ]; then
 		info "Looking up the Route 53 hosted zone for $BASE_DOMAIN"
@@ -205,10 +254,6 @@ write_settings() {
 		model=$MODEL
 	fi
 
-	local instance_type=t3.medium sandbox_memory=1500m sandbox_cpus=1 volume=40
-	if [ "$SIZE" = "standard" ]; then
-		instance_type=t3.xlarge sandbox_memory=3g sandbox_cpus=2 volume=100
-	fi
 	cat >"$SETTINGS" <<EOF
 aws_region         = "$AWS_REGION_CHOICE"
 base_domain        = "$BASE_DOMAIN"
@@ -219,12 +264,8 @@ agency_model       = "$model"
 acme_email         = "$ADMIN_EMAIL"
 admin_email        = "$ADMIN_EMAIL"
 repo_ref           = "$REPO_REF"
-instance_type      = "$instance_type"
-volume_size_gb     = $volume
-sandbox_memory     = "$sandbox_memory"
-sandbox_cpus       = "$sandbox_cpus"
-app_runtime        = "$APP_RUNTIME"
 EOF
+	profile_settings >>"$SETTINGS"
 }
 
 verify_keys() {
@@ -382,27 +423,85 @@ EOF
 	update
 }
 
-# Runs published apps on Fargate from now on. The platform moves apps that are already published
-# when it restarts, with the version each one had; their preview sandboxes stay on the server.
-use_fargate() {
-	[ -f "$SETTINGS" ] || fail "Nothing deployed yet. Run ./deploy.sh and choose Fargate for published apps."
-	[ "$(setting app_runtime docker)" != "fargate" ] || fail "Published apps already run on Fargate."
-	sed -i.bak -E '/^app_runtime /d' "$SETTINGS"
+# Changes the profile of a running deployment. Moving to Fargate keeps everything: the platform moves
+# each published app with the version it had, and each app's workspace the first time someone opens it.
+# Moving back from Fargate to the server isn't supported yet.
+change_profile() {
+	[ -f "$SETTINGS" ] || fail "Nothing deployed yet. Run ./deploy.sh first."
+	echo "Now: $(setting instance_type), dev environments on $(setting sandbox_runtime docker), published apps on $(setting app_runtime docker)."
+	choose_profile
+	[ "$(setting sandbox_runtime docker)" = fargate ] && [ "$SANDBOX_RUNTIME" = docker ] &&
+		fail "Dev environments already run on Fargate; moving them back to the server isn't supported yet."
+	[ "$(setting app_runtime docker)" = fargate ] && [ "$APP_RUNTIME" = docker ] &&
+		fail "Published apps already run on Fargate; moving them back to the server isn't supported yet."
+	local settings
+	settings=$(profile_settings)
+	sed -i.bak -E '/^(# profile:|instance_type|volume_size_gb|sandbox_memory|sandbox_cpus|sandbox_runtime|app_runtime) /d' "$SETTINGS"
 	rm -f "$SETTINGS.bak"
-	echo 'app_runtime        = "fargate"' >>"$SETTINGS"
+	printf '%s\n' "$settings" >>"$SETTINGS"
 	deploy
 	update
 }
 
-# Services the platform created in the apps cluster are not in Terraform's state; they go first.
+# Rough monthly costs, on-demand us-east-1 list prices (other regions differ by up to about 30%).
+costs() {
+	[ -f "$SETTINGS" ] || fail "Nothing deployed yet. Run ./deploy.sh first."
+	local instance_type volume server
+	instance_type=$(setting instance_type t3.medium)
+	volume=$(setting volume_size_gb 40)
+	case "$instance_type" in
+	t3.medium) server=30.37 ;;
+	t3.large) server=60.74 ;;
+	t3.xlarge) server=121.47 ;;
+	t3.2xlarge) server=242.94 ;;
+	*) server=0 ;;
+	esac
+	awk -v server="$server" -v type="$instance_type" -v volume="$volume" \
+		-v sandboxes="$(setting sandbox_runtime docker)" -v apps="$(setting app_runtime docker)" -v spot="$(setting sandbox_spot true)" 'BEGIN {
+		disk = volume * 0.08; ip = 3.65
+		printf "%-34s $%7.2f a month\n", "Server " type ", always on:", server
+		printf "%-34s $%7.2f a month\n", "Disk " volume " GB and public IP:", disk + ip
+		printf "%-34s $%7.2f a month (about)\n", "Backups (S3) and logs:", 1
+		if (server == 0) print "  (unknown instance type: check its price at aws.amazon.com/ec2/pricing)"
+		printf "%-34s $%7.2f a month, or $%.2f while stopped\n", "Fixed total:", server + disk + ip + 1, disk + ip
+		if (sandboxes == "fargate") {
+			hour = (spot == "false") ? 0.0405 + 3 * 0.00445 + 0.005 : 0.0122 + 3 * 0.00134 + 0.005
+			printf "Each app being built (Fargate%s, 1 vCPU, 3 GB): $%.3f an hour while it is awake\n", (spot == "false") ? "" : " Spot", hour
+			printf "  e.g. 10 people building 3 hours a day, 21 days:  $%.2f a month\n", hour * 10 * 3 * 21
+			printf "Workspaces on EFS: $0.30 per GB a month (an app is usually under 50 MB)\n"
+		} else {
+			print "Dev environments run on the server: no extra cost."
+		}
+		if (apps == "fargate") {
+			app = 730 * (0.25 * 0.04048 + 0.5 * 0.004445 + 0.005)
+			printf "Each published app (Fargate, 0.25 vCPU, 0.5 GB, always on): $%.2f a month; more while it scales out\n", app
+		} else {
+			print "Published apps run on the server: no extra cost."
+		}
+		print "Claude usage is billed separately (Anthropic, or Amazon Bedrock on this AWS bill)."
+	}'
+}
+
+# Tasks the platform started in the cluster are not in Terraform's state. Sandboxes stop with the
+# server (no platform is left to put them to sleep); services go before a destroy.
+stop_sandboxes() {
+	local cluster
+	cluster=$(terraform output -raw cluster 2>/dev/null || true)
+	[ -n "$cluster" ] && [ "$cluster" != "null" ] || return 0
+	for task in $(aws ecs list-tasks --region "$(region)" --cluster "$cluster" --desired-status RUNNING --query 'taskArns[]' --output text); do
+		aws ecs stop-task --region "$(region)" --cluster "$cluster" --task "$task" --reason "Server stopped" >/dev/null
+	done
+}
+
 delete_app_services() {
 	local cluster
-	cluster=$(terraform output -raw apps_cluster 2>/dev/null || true)
+	cluster=$(terraform output -raw cluster 2>/dev/null || true)
 	[ -n "$cluster" ] && [ "$cluster" != "null" ] || return 0
 	info "Deleting published apps on Fargate"
 	for service in $(aws ecs list-services --region "$(region)" --cluster "$cluster" --query 'serviceArns[]' --output text); do
 		aws ecs delete-service --region "$(region)" --cluster "$cluster" --service "$service" --force >/dev/null
 	done
+	stop_sandboxes
 }
 
 case "$ACTION" in
@@ -418,13 +517,17 @@ use-aws)
 	check_aws
 	use_aws
 	;;
-use-fargate)
+profile)
 	check_aws
-	use_fargate
+	change_profile
+	;;
+costs)
+	costs
 	;;
 stop)
 	check_aws
 	info "Stopping the server (disk, Elastic IP and DNS records are kept)"
+	stop_sandboxes
 	aws ec2 stop-instances --region "$(region)" --instance-ids "$(terraform output -raw instance_id)" >/dev/null
 	aws ec2 wait instance-stopped --region "$(region)" --instance-ids "$(terraform output -raw instance_id)"
 	info "Stopped. Start it again with: ./deploy.sh start"
@@ -463,6 +566,6 @@ destroy)
 	terraform destroy -input=false -auto-approve
 	;;
 *)
-	fail "Unknown command '$ACTION'. Use deploy, update, use-aws, use-fargate, stop, start, status, backup or destroy."
+	fail "Unknown command '$ACTION'. Use deploy, update, use-aws, profile, costs, stop, start, status, backup or destroy."
 	;;
 esac

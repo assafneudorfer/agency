@@ -1,9 +1,10 @@
 import { appHost } from "./config.ts";
 import { query, queryOne } from "./db.ts";
 import { appRuntime } from "./apps.ts";
-import { execIn, spawnDocker } from "./docker.ts";
+import { spawnDocker } from "./docker.ts";
+import { execIn, sandboxes } from "./sandboxes.ts";
 import { bridgeFor } from "./agent.ts";
-import { ensureLiveDatabase, type Project, publishedEnv, sandboxName } from "./projects.ts";
+import { ensureLiveDatabase, type Project, publishedEnv } from "./projects.ts";
 
 export interface Deployment {
 	id: number;
@@ -45,11 +46,12 @@ export async function listDeployments(project: Project): Promise<Deployment[]> {
 /** Pipes the release directory out of the sandbox as a tar stream straight into `docker build -`. */
 function buildImage(project: Project, tag: string): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const tar = spawnDocker(["exec", sandboxName(project), "tar", "-C", "/tmp/agency-release", "-cf", "-", "."]);
+		const tar = sandboxes.spawn(project, ["tar", "-C", "/tmp/agency-release", "-cf", "-", "."]);
+		tar.stdin.end();
 		const build = spawnDocker(["build", "-t", tag, "-"]);
 		let log = "";
-		tar.stdout!.pipe(build.stdin!);
-		tar.stderr!.on("data", (chunk) => {
+		tar.stdout.pipe(build.stdin!);
+		tar.stderr.on("data", (chunk) => {
 			log += chunk;
 		});
 		build.stdout!.on("data", (chunk) => {
@@ -76,7 +78,7 @@ export async function publish(project: Project, userId: string, onLog: (line: st
 		onLog("Saving the current version");
 		const commit = await bridge.commit("Publish");
 		onLog("Building for production");
-		const build = await execIn(sandboxName(project), RELEASE_SCRIPT, 15 * 60_000);
+		const build = await execIn(project, RELEASE_SCRIPT, 15 * 60_000);
 		if (build.code !== 0) throw new Error(`Build failed:\n${(build.stdout + build.stderr).slice(-4000)}`);
 		const last = await queryOne<{ version: number }>(
 			"select coalesce(max(version), 0) as version from deployments where project_id = $1",

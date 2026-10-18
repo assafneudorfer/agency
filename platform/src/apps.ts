@@ -1,7 +1,6 @@
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { appHost, config } from "./config.ts";
 import { containerState, docker, envArgs, labelArgs, routeLabels } from "./docker.ts";
+import { removeRoutes } from "./ecs.ts";
 import { fargateRuntime } from "./fargate.ts";
 import { appContainerName, type Project } from "./projects.ts";
 
@@ -66,9 +65,8 @@ const dockerRuntime: AppRuntime = {
 		await removeLocalImages(project);
 	},
 
-	// A routes file left from running apps on Fargate would send their hosts to tasks that are gone.
 	start() {
-		rm(join(config.fargate.routesDir, "apps.yml"), { force: true }).catch(() => {});
+		void removeRoutes("apps.yml");
 	},
 };
 

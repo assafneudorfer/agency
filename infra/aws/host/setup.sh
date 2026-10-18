@@ -36,7 +36,7 @@ install -m 0755 "$HERE/agency-aws-credentials" /usr/local/bin/agency-aws-credent
 # All-AWS setup: short-lived Route 53 and Bedrock credentials, refreshed before Docker starts and every 15 minutes.
 cat > /etc/systemd/system/agency-aws-credentials.service <<'UNIT'
 [Unit]
-Description=Refresh Agency's AWS credentials (Route 53, Bedrock, Fargate apps)
+Description=Refresh Agency's AWS credentials (Route 53, Bedrock, ECS cluster)
 Wants=network-online.target
 After=network-online.target
 Before=docker.service
@@ -63,14 +63,28 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now agency-backup.timer >/dev/null
-# Published apps on Fargate reach their databases at this server's private address.
-if grep -q '^AGENCY_APP_RUNTIME=fargate' /opt/agency-src/.env 2>/dev/null; then
+# Tasks on Fargate reach their databases at this server's private address.
+if grep -q '^AGENCY_ECS_CLUSTER=.' /opt/agency-src/.env 2>/dev/null; then
 	imds_token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
 	private_ip=$(curl -fsS -H "X-aws-ec2-metadata-token: $imds_token" http://169.254.169.254/latest/meta-data/local-ipv4)
 	sed -i '/^AGENCY_HOST_PRIVATE_IP=/d' /opt/agency-src/.env
 	echo "AGENCY_HOST_PRIVATE_IP=$private_ip" >>/opt/agency-src/.env
 fi
-if grep -qE '^AGENCY_(DNS|BEDROCK|APPS)_ROLE_ARN=.' /opt/agency-src/.env 2>/dev/null; then
+# Sandboxes on Fargate keep their workspaces on EFS; the platform creates, moves and deletes them here.
+efs_id=$(grep -E '^AGENCY_EFS_ID=' /opt/agency-src/.env 2>/dev/null | cut -d= -f2- || true)
+if [ -n "$efs_id" ] && ! mountpoint -q /mnt/agency-efs; then
+	region=$(grep -E '^AGENCY_AWS_REGION=' /opt/agency-src/.env | cut -d= -f2-)
+	command -v mount.nfs4 >/dev/null || { apt-get update -qq && apt-get install -y -qq nfs-common >/dev/null; }
+	mkdir -p /mnt/agency-efs
+	sed -i '\|/mnt/agency-efs|d' /etc/fstab
+	echo "$efs_id.efs.$region.amazonaws.com:/ /mnt/agency-efs nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev 0 0" >>/etc/fstab
+	# A new file system's mount targets take a minute or two to answer.
+	for _ in $(seq 1 30); do mount /mnt/agency-efs 2>/dev/null && break; sleep 10; done
+	mountpoint -q /mnt/agency-efs || { echo "Could not mount EFS $efs_id" >&2; exit 1; }
+	mkdir -p /mnt/agency-efs/workspaces
+	echo "Workspaces on EFS mounted at /mnt/agency-efs"
+fi
+if grep -qE '^AGENCY_(DNS|BEDROCK|CLUSTER)_ROLE_ARN=.' /opt/agency-src/.env 2>/dev/null; then
 	had_dns=$([ -f /var/lib/agency/aws/dns/credentials.json ] && echo yes || true)
 	systemctl enable agency-aws-credentials.service >/dev/null
 	systemctl enable --now agency-aws-credentials.timer >/dev/null

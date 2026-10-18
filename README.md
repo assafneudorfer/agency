@@ -122,9 +122,9 @@ Everything runs on one machine you control: a single AWS instance with Docker, s
 | Every turn is a restorable version | monday.com, Notion, Linear and any MCP server | Separate live database from the first publish | Monthly AI budgets per member, usage page |
 | Code tab with an in-browser editor | Read-only by default; connections can be limited to specific apps | Push to your GitHub organization, automatically for new apps | Personal and organization skills |
 | Auto, Plan and Chat modes, with a model picker | Each app gets its own Postgres database, with a Data tab | Nightly backups to S3 | Allowed Claude models and the organization default |
-| Phone layout, light and dark | | | One AWS instance, stopped when nobody uses it |
+| Phone layout, light and dark | | | One AWS server, or a server plus AWS Fargate; idle apps sleep |
 
-What's next is in the [roadmap](PLAN.md): per-person connector sign-in, sandbox hardening (gVisor or Firecracker, egress allowlist, idle shutdown), and more than one host when one is not enough.
+What's next is in the [roadmap](PLAN.md): per-person connector sign-in, sandbox hardening (gVisor or Firecracker, egress allowlist), and packing published apps onto shared EC2 instances as a cheaper alternative to Fargate.
 
 ---
 
@@ -147,10 +147,22 @@ The script asks how to set things up, shows the Terraform plan, and waits until 
 | **Cloudflare + Claude API key** | Cloudflare | Anthropic API | A Cloudflare token (Zone > DNS > Edit) and an Anthropic key |
 | **All on AWS** | Route 53 | Amazon Bedrock | Nothing: the server's IAM roles do it |
 
-Then sign in at `https://<your-domain>` with the admin email and password you chose. A `small` server (t3.medium) costs about $37 a month running and about $7 a month stopped. Published apps can run on the same server or on AWS Fargate, where each app scales on its own. The [deploy guide](docs/deploy.md) covers the setups, moving between them, updates, backups and restore.
+It also asks for a profile, sized by how your organization will use Agency rather than by head count:
+
+| Profile | Runs on | Fits | About a month |
+|---|---|---|---|
+| **Try it out** | One small server | ~2 apps built at once, a few light published apps | $37 ($7 stopped) |
+| **Team** | One larger server | ~4 apps built at once, a dozen published apps | $133 |
+| **Organization** | Small server + AWS Fargate | Any number of apps built at once; published apps that scale | $37 + 2 to 6¢ an hour per app being built + $13 per published app |
+
+On the Organization profile each app's dev environment runs only while someone builds it and sleeps when idle, and each published app is its own service that scales with traffic. `./deploy.sh costs` prints what your setup costs, and `./deploy.sh profile` changes it later. Then sign in at `https://<your-domain>` with the admin email and password you chose. The [deploy guide](docs/deploy.md) covers the profiles, the setups, updates, backups and restore.
+
+**Let an agent set it up.** Open the repository in Claude Code (or another coding agent) and ask it to deploy Agency for your organization. [AGENTS.md](AGENTS.md) tells it what to ask, which profile fits, what it will cost, and how to run `deploy.sh` with you.
 
 ```bash
 ./deploy.sh update     # redeploy the latest code
+./deploy.sh costs      # what the current setup costs a month
+./deploy.sh profile    # change the profile
 ./deploy.sh stop       # stop the server when nobody is using it (start, status)
 ./deploy.sh backup     # back up every database now
 ./deploy.sh destroy    # remove everything

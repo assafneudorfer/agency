@@ -1,11 +1,10 @@
-import type { ChildProcess } from "node:child_process";
 import type { ImageContent } from "./attachments.ts";
 import { bedrockAgentEnv } from "./bedrock.ts";
 import { config } from "./config.ts";
-import { execIn, spawnDocker } from "./docker.ts";
 import { autoPush } from "./github.ts";
 import { resolveModel } from "./models.ts";
-import { ensureSandbox, type Project, sandboxName } from "./projects.ts";
+import { ensureSandbox, type Project } from "./projects.ts";
+import { execIn, type SandboxProcess, sandboxes } from "./sandboxes.ts";
 import { installSkills, skillsFingerprint } from "./skills.ts";
 import { recordUsage } from "./usage.ts";
 
@@ -46,7 +45,7 @@ interface Pending {
  */
 export class AgentBridge {
 	readonly project: Project;
-	private child: ChildProcess | undefined;
+	private child: SandboxProcess | undefined;
 	private buffer = "";
 	private nextId = 0;
 	private readonly pending = new Map<string, Pending>();
@@ -78,9 +77,9 @@ export class AgentBridge {
 		for (const listener of this.listeners) listener(event);
 	}
 
-	private starting: Promise<ChildProcess> | undefined;
+	private starting: Promise<SandboxProcess> | undefined;
 
-	private start(): Promise<ChildProcess> {
+	private start(): Promise<SandboxProcess> {
 		if (this.child) return Promise.resolve(this.child);
 		this.starting ??= this.launch().finally(() => {
 			this.starting = undefined;
@@ -88,20 +87,19 @@ export class AgentBridge {
 		return this.starting;
 	}
 
-	private async launch(): Promise<ChildProcess> {
+	private async launch(): Promise<SandboxProcess> {
 		await ensureSandbox(this.project);
 		// A skill that fails to copy shouldn't stop anyone building; pi then starts without skills.
-		const skills = await installSkills(sandboxName(this.project), this.skillsOf).catch((error) => {
+		const skills = await installSkills(this.project, this.skillsOf).catch((error) => {
 			console.error(`[agent ${this.project.slug}] ${error instanceof Error ? error.message : error}`);
 			return { dirs: [] as string[], fingerprint: "" };
 		});
 		this.loadedSkills = skills.fingerprint;
-		const env: string[] = [];
+		const env: Record<string, string> = { ...bedrockAgentEnv(this.project.id) };
 		for (const name of config.agentEnv) {
 			const value = process.env[name];
-			if (value) env.push("-e", `${name}=${value}`);
+			if (value) env[name] = value;
 		}
-		for (const [name, value] of Object.entries(bedrockAgentEnv(this.project.id))) env.push("-e", `${name}=${value}`);
 		const piArgs = [
 			"pi",
 			"--mode",
@@ -118,11 +116,11 @@ export class AgentBridge {
 		if (this.mode !== "auto") piArgs.push("--append-system-prompt", MODE_PROMPTS[this.mode], "--tools", READ_ONLY_TOOLS);
 		this.loadedModel = this.model ?? (await resolveModel());
 		piArgs.push("--model", this.loadedModel);
-		const child = spawnDocker(["exec", "-i", ...env, "-w", "/workspace", sandboxName(this.project), ...piArgs]);
+		const child = sandboxes.spawn(this.project, piArgs, env);
 		this.child = child;
-		child.stdout!.setEncoding("utf8");
-		child.stdout!.on("data", (chunk: string) => this.onData(chunk));
-		child.stderr!.on("data", (chunk: Buffer) => {
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk: string) => this.onData(chunk));
+		child.stderr.on("data", (chunk: Buffer) => {
 			const text = chunk.toString().trim();
 			if (text) console.error(`[agent ${this.project.slug}] ${text}`);
 		});
@@ -194,7 +192,7 @@ export class AgentBridge {
 				reject(new Error(`Agent did not answer ${String(command.type)} in time`));
 			}, timeoutMs);
 			this.pending.set(id, { resolve: resolve as (data: unknown) => void, reject, timer });
-			child.stdin!.write(`${JSON.stringify({ ...command, id })}\n`);
+			child.stdin.write(`${JSON.stringify({ ...command, id })}\n`);
 		});
 	}
 
@@ -241,7 +239,7 @@ export class AgentBridge {
 	/** Commits the workspace after each settled run, so every change the agent makes is a restorable version. */
 	async commit(message = "Agent changes"): Promise<string> {
 		const script = `git add -A && (git diff --cached --quiet || git commit -q -m ${JSON.stringify(message)}) ; git rev-parse --short HEAD`;
-		const result = await execIn(sandboxName(this.project), script);
+		const result = await execIn(this.project, script);
 		const commit = result.stdout.trim().split("\n").pop() ?? "";
 		this.emit({ type: "agency_committed", commit });
 		autoPush(this.project.id);

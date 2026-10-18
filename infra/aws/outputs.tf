@@ -21,6 +21,6 @@ output "backup_bucket" {
 }
 
 output "cluster" {
-  description = "ECS cluster of the published apps and sandboxes, when either runs on Fargate"
+  description = "ECS cluster of the published apps and sandboxes, when either runs in it"
   value       = try(aws_ecs_cluster.agency[0].name, null)
 }

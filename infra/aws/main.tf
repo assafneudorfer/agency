@@ -109,6 +109,7 @@ resource "aws_ssm_parameter" "env" {
       "AGENCY_APPS_ECR_REPOSITORY=${try(aws_ecr_repository.apps[0].name, "")}",
       "AGENCY_APPS_SECURITY_GROUP=${try(aws_security_group.apps[0].id, "")}",
       "AGENCY_APP_MAX_TASKS=${var.app_max_tasks}",
+      "AGENCY_APPS_CAPACITY_PROVIDER=${try(aws_ecs_capacity_provider.apps[0].name, "")}",
       "AGENCY_SANDBOX_ECR_REPOSITORY=${try(aws_ecr_repository.sandbox[0].name, "")}",
       "AGENCY_SANDBOX_SECURITY_GROUP=${try(aws_security_group.sandboxes[0].id, "")}",
       "AGENCY_SANDBOX_SPOT=${var.sandbox_spot}",

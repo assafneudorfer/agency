@@ -77,4 +77,4 @@ export async function removeLocalImages(project: Project): Promise<void> {
 	if (ids.length > 0) await docker(["rmi", "-f", ...ids], { allowFailure: true });
 }
 
-export const appRuntime: AppRuntime = config.appRuntime === "fargate" ? fargateRuntime : dockerRuntime;
+export const appRuntime: AppRuntime = config.appRuntime === "docker" ? dockerRuntime : fargateRuntime;

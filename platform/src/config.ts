@@ -43,8 +43,9 @@ export const config = {
 	sandboxMemory: optional("AGENCY_SANDBOX_MEMORY", "3g"),
 	sandboxCpus: optional("AGENCY_SANDBOX_CPUS", "2"),
 	appMemory: optional("AGENCY_APP_MEMORY", "512m"),
-	// Where published apps run: "docker" (containers on this server) or "fargate" (an ECS service per app).
-	appRuntime: optional("AGENCY_APP_RUNTIME", "docker") as "docker" | "fargate",
+	// Where published apps run: "docker" (containers on this server), "ec2" (an ECS service per app, packed
+	// onto shared apps servers that scale out when full) or "fargate" (an ECS service per app, each on its own).
+	appRuntime: optional("AGENCY_APP_RUNTIME", "docker") as "docker" | "ec2" | "fargate",
 	// Where sandboxes run: "docker" (containers on this server) or "fargate" (an ECS task per app that
 	// runs while someone builds, with its workspace on EFS).
 	sandboxRuntime: optional("AGENCY_SANDBOX_RUNTIME", "docker") as "docker" | "fargate",
@@ -67,6 +68,12 @@ export const config = {
 		cpu: optional("AGENCY_APP_CPU", "256"),
 		memoryMb: optional("AGENCY_APP_MEMORY_MB", "512"),
 		maxTasks: Number(optional("AGENCY_APP_MAX_TASKS", "3")),
+	},
+	// Published apps on the shared apps servers: what each app reserves decides how many fit on a server.
+	appsServers: {
+		capacityProvider: process.env.AGENCY_APPS_CAPACITY_PROVIDER ?? "",
+		cpu: Number(optional("AGENCY_APP_SERVER_CPU", "128")),
+		memoryReservationMb: Number(optional("AGENCY_APP_SERVER_MEMORY_MB", "256")),
 	},
 	sandboxFargate: {
 		repository: process.env.AGENCY_SANDBOX_ECR_REPOSITORY ?? "",

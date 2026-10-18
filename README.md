@@ -122,9 +122,9 @@ Everything runs on one machine you control: a single AWS instance with Docker, s
 | Every turn is a restorable version | monday.com, Notion, Linear and any MCP server | Separate live database from the first publish | Monthly AI budgets per member, usage page |
 | Code tab with an in-browser editor | Read-only by default; connections can be limited to specific apps | Push to your GitHub organization, automatically for new apps | Personal and organization skills |
 | Auto, Plan and Chat modes, with a model picker | Each app gets its own Postgres database, with a Data tab | Nightly backups to S3 | Allowed Claude models and the organization default |
-| Phone layout, light and dark | | | One AWS server, or a server plus AWS Fargate; idle apps sleep |
+| Phone layout, light and dark | | | One AWS server, or a server plus an ECS cluster that scales; idle apps sleep |
 
-What's next is in the [roadmap](PLAN.md): per-person connector sign-in, sandbox hardening (gVisor or Firecracker, egress allowlist), and packing published apps onto shared EC2 instances as a cheaper alternative to Fargate.
+What's next is in the [roadmap](PLAN.md): per-person connector sign-in, sandbox hardening (gVisor or Firecracker, egress allowlist).
 
 ---
 
@@ -153,9 +153,9 @@ It also asks for a profile, sized by how your organization will use Agency rathe
 |---|---|---|---|
 | **Try it out** | One small server | ~2 apps built at once, a few light published apps | $37 ($7 stopped) |
 | **Team** | One larger server | ~4 apps built at once, a dozen published apps | $133 |
-| **Organization** | Small server + AWS Fargate | Any number of apps built at once; published apps that scale | $37 + 2 to 6¢ an hour per app being built + $13 per published app |
+| **Organization** | Small server + AWS cluster | Any number of apps built at once; published apps that scale | $37 + 2 to 6¢ an hour per app being built + $36 per apps server (~14 apps each) |
 
-On the Organization profile each app's dev environment runs only while someone builds it and sleeps when idle, and each published app is its own service that scales with traffic. `./deploy.sh costs` prints what your setup costs, and `./deploy.sh profile` changes it later. Then sign in at `https://<your-domain>` with the admin email and password you chose. The [deploy guide](docs/deploy.md) covers the profiles, the setups, updates, backups and restore.
+On the Organization profile each app's dev environment runs on AWS Fargate only while someone builds it and sleeps when idle, and published apps share apps servers: many apps on one server, and another server starts on its own when they're full. `./deploy.sh costs` prints what your setup costs, and `./deploy.sh profile` changes it later. Then sign in at `https://<your-domain>` with the admin email and password you chose. The [deploy guide](docs/deploy.md) covers the profiles, the setups, updates, backups and restore.
 
 **Let an agent set it up.** Open the repository in Claude Code (or another coding agent) and ask it to deploy Agency for your organization. [AGENTS.md](AGENTS.md) tells it what to ask, which profile fits, what it will cost, and how to run `deploy.sh` with you.
 

@@ -6,7 +6,7 @@
 #   ./deploy.sh            create or update the stack (asks for anything it needs)
 #   ./deploy.sh update     pull the latest code on the server and rebuild
 #   ./deploy.sh use-aws    move a Cloudflare + Claude API key deployment to all on AWS
-#   ./deploy.sh profile    change how Agency runs (one server, a bigger server, or AWS Fargate)
+#   ./deploy.sh profile    change how Agency runs (one server, a bigger server, or a cluster on AWS)
 #   ./deploy.sh costs      what the current setup costs a month, and what the other profiles would
 #   ./deploy.sh stop       stop the server to save money (data, address and DNS stay)
 #   ./deploy.sh start      start it again; the stack comes back on its own
@@ -180,22 +180,22 @@ choose_profile() {
 	echo "     time and a handful of light published apps.                   about \$37 a month"
 	echo "  2) Team: one larger server runs everything. About 4 apps built at the same time"
 	echo "     and a dozen published apps.                                  about \$133 a month"
-	echo "  3) Organization: a small server for the platform; every app's dev environment and"
-	echo "     every published app on AWS Fargate. Dev environments run only while someone"
-	echo "     builds and sleep when idle; published apps scale with traffic. No limit on how"
-	echo "     many build at once.      about \$37 a month + 2 to 6 cents an hour per app being"
-	echo "                              built + about \$13 a month per published app"
+	echo "  3) Organization: a small server for the platform; every app's dev environment on"
+	echo "     AWS Fargate, running only while someone builds; published apps packed onto shared"
+	echo "     apps servers, and another server starts when they're full. No limit on how many"
+	echo "     build at once.           about \$37 a month + 2 to 6 cents an hour per app being"
+	echo "                              built + about \$36 a month per apps server (~14 apps each)"
 	echo "  4) Custom: choose the server size and where dev environments and published apps run"
 	ask PROFILE "Choose 1, 2, 3 or 4" "1"
 	case "$PROFILE" in
 	1) PROFILE=try SIZE=small SANDBOX_RUNTIME=docker APP_RUNTIME=docker ;;
 	2) PROFILE=team SIZE=standard SANDBOX_RUNTIME=docker APP_RUNTIME=docker ;;
-	3) PROFILE=organization SIZE=small SANDBOX_RUNTIME=fargate APP_RUNTIME=fargate ;;
+	3) PROFILE=organization SIZE=small SANDBOX_RUNTIME=fargate APP_RUNTIME=ec2 ;;
 	4)
 		PROFILE=custom
 		ask SIZE "Server size: small (t3.medium, 4 GB) or standard (t3.xlarge, 16 GB)" "small"
 		ask SANDBOX_RUNTIME "Dev environments: docker (on the server) or fargate (sleep when idle, pay per hour)" "docker"
-		ask APP_RUNTIME "Published apps: docker (on the server) or fargate (own service each, scales)" "docker"
+		ask APP_RUNTIME "Published apps: docker (on the server), ec2 (shared apps servers that scale out) or fargate (each on its own)" "docker"
 		;;
 	*) fail "Choose 1, 2, 3 or 4" ;;
 	esac
@@ -203,9 +203,11 @@ choose_profile() {
 	small\ * | standard\ *) ;;
 	*) fail "Server size must be small or standard" ;;
 	esac
-	for runtime in "$SANDBOX_RUNTIME" "$APP_RUNTIME"; do
-		[ "$runtime" = docker ] || [ "$runtime" = fargate ] || fail "Choose docker or fargate"
-	done
+	[ "$SANDBOX_RUNTIME" = docker ] || [ "$SANDBOX_RUNTIME" = fargate ] || fail "Dev environments: choose docker or fargate"
+	case "$APP_RUNTIME" in
+	docker | ec2 | fargate) ;;
+	*) fail "Published apps: choose docker, ec2 or fargate" ;;
+	esac
 }
 
 # Terraform settings for the chosen profile. On Fargate a dev environment gets its own 1 vCPU and 3 GB,
@@ -423,17 +425,19 @@ EOF
 	update
 }
 
-# Changes the profile of a running deployment. Moving to Fargate keeps everything: the platform moves
+# Changes the profile of a running deployment. Moving to the cluster keeps everything: the platform moves
 # each published app with the version it had, and each app's workspace the first time someone opens it.
-# Moving back from Fargate to the server isn't supported yet.
+# Moving back from the cluster to the server, or published apps between ec2 and fargate, isn't supported yet.
 change_profile() {
 	[ -f "$SETTINGS" ] || fail "Nothing deployed yet. Run ./deploy.sh first."
 	echo "Now: $(setting instance_type), dev environments on $(setting sandbox_runtime docker), published apps on $(setting app_runtime docker)."
 	choose_profile
 	[ "$(setting sandbox_runtime docker)" = fargate ] && [ "$SANDBOX_RUNTIME" = docker ] &&
 		fail "Dev environments already run on Fargate; moving them back to the server isn't supported yet."
-	[ "$(setting app_runtime docker)" = fargate ] && [ "$APP_RUNTIME" = docker ] &&
-		fail "Published apps already run on Fargate; moving them back to the server isn't supported yet."
+	local apps_now
+	apps_now=$(setting app_runtime docker)
+	[ "$apps_now" != docker ] && [ "$APP_RUNTIME" != "$apps_now" ] &&
+		fail "Published apps already run on $apps_now; moving them elsewhere isn't supported yet."
 	local settings
 	settings=$(profile_settings)
 	sed -i.bak -E '/^(# profile:|instance_type|volume_size_gb|sandbox_memory|sandbox_cpus|sandbox_runtime|app_runtime) /d' "$SETTINGS"
@@ -472,7 +476,12 @@ costs() {
 		} else {
 			print "Dev environments run on the server: no extra cost."
 		}
-		if (apps == "fargate") {
+		if (apps == "ec2") {
+			pool = 30.37 + 30 * 0.08 + ip
+			printf "Each apps server (t3.medium, 30 GB, public IP): $%.2f a month. It holds about 14 small published\n", pool
+			printf "  apps; another starts when they are full (up to apps_servers_max, default 4).\n"
+			printf "  e.g. 8 published apps: one server, $%.2f a month ($%.2f an app); 20 apps: two, $%.2f.\n", pool, pool / 8, 2 * pool
+		} else if (apps == "fargate") {
 			app = 730 * (0.25 * 0.04048 + 0.5 * 0.004445 + 0.005)
 			printf "Each published app (Fargate, 0.25 vCPU, 0.5 GB, always on): $%.2f a month; more while it scales out\n", app
 		} else {
@@ -497,7 +506,7 @@ delete_app_services() {
 	local cluster
 	cluster=$(terraform output -raw cluster 2>/dev/null || true)
 	[ -n "$cluster" ] && [ "$cluster" != "null" ] || return 0
-	info "Deleting published apps on Fargate"
+	info "Deleting published apps in the cluster"
 	for service in $(aws ecs list-services --region "$(region)" --cluster "$cluster" --query 'serviceArns[]' --output text); do
 		aws ecs delete-service --region "$(region)" --cluster "$cluster" --service "$service" --force >/dev/null
 	done

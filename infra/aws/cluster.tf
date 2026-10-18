@@ -1,14 +1,18 @@
-# Agency on an ECS cluster (AWS Fargate), chosen at deploy time:
-#   app_runtime = "fargate":     each published app is its own ECS service that scales with traffic.
+# Agency on an ECS cluster, chosen at deploy time:
+#   app_runtime = "ec2":         each published app is an ECS service, packed with others onto shared
+#                                apps servers; another server starts when they're full.
+#   app_runtime = "fargate":     each published app is an ECS service on AWS Fargate, on its own.
 #   sandbox_runtime = "fargate": each app's sandbox is an ECS task that runs only while someone builds,
 #                                on Fargate Spot by default, with its workspace on EFS.
 # The server keeps the platform, Postgres and Traefik: it builds images, pushes them to ECR, and routes
 # to the tasks' private addresses after checking sign-in.
 
 locals {
+  apps_servers      = var.app_runtime == "ec2"
   apps_fargate      = var.app_runtime == "fargate"
+  apps_cluster      = local.apps_servers || local.apps_fargate
   sandboxes_fargate = var.sandbox_runtime == "fargate"
-  cluster           = local.apps_fargate || local.sandboxes_fargate
+  cluster           = local.apps_cluster || local.sandboxes_fargate
 }
 
 data "aws_subnets" "default" {
@@ -30,7 +34,7 @@ resource "aws_ecs_cluster" "agency" {
 resource "aws_ecs_cluster_capacity_providers" "agency" {
   count              = local.cluster ? 1 : 0
   cluster_name       = aws_ecs_cluster.agency[0].name
-  capacity_providers = ["FARGATE", "FARGATE_SPOT"]
+  capacity_providers = concat(["FARGATE", "FARGATE_SPOT"], aws_ecs_capacity_provider.apps[*].name)
   default_capacity_provider_strategy {
     capacity_provider = "FARGATE"
     weight            = 1
@@ -63,7 +67,7 @@ resource "aws_iam_role_policy_attachment" "task_execution" {
 # Published apps
 
 resource "aws_ecr_repository" "apps" {
-  count                = local.apps_fargate ? 1 : 0
+  count                = local.apps_cluster ? 1 : 0
   name                 = "${var.name}-apps"
   image_tag_mutability = "IMMUTABLE"
   # ./deploy.sh destroy removes everything, published images included.
@@ -73,17 +77,18 @@ resource "aws_ecr_repository" "apps" {
   }
 }
 
-# Published apps accept traffic only from Traefik on the server, on the app port.
+# Published apps accept traffic only from Traefik on the server: on the app port on Fargate, or on the
+# ports ECS hands out on the apps servers.
 resource "aws_security_group" "apps" {
-  count       = local.apps_fargate ? 1 : 0
+  count       = local.apps_cluster ? 1 : 0
   name        = "${var.name}-apps"
-  description = "Agency published apps on Fargate"
+  description = "Agency published apps"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
     description     = "Traefik on the Agency server"
-    from_port       = 3000
-    to_port         = 3000
+    from_port       = local.apps_servers ? 32768 : 3000
+    to_port         = local.apps_servers ? 65535 : 3000
     protocol        = "tcp"
     security_groups = [aws_security_group.agency.id]
   }
@@ -93,6 +98,127 @@ resource "aws_security_group" "apps" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Apps servers: an Auto Scaling group of ECS instances that ECS grows and shrinks itself (managed
+# scaling): when a published app doesn't fit on the running servers another one starts, and a server
+# that is no longer needed is drained and removed. There is always at least one.
+
+data "aws_ssm_parameter" "ecs_ami" {
+  count = local.apps_servers ? 1 : 0
+  name  = "/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id"
+}
+
+# What the ECS agent on an apps server needs: join the cluster, pull images, write logs.
+resource "aws_iam_role" "apps_server" {
+  count = local.apps_servers ? 1 : 0
+  name  = "${var.name}-apps-server"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "apps_server" {
+  count      = local.apps_servers ? 1 : 0
+  role       = aws_iam_role.apps_server[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
+}
+
+resource "aws_iam_role_policy_attachment" "apps_server_ssm" {
+  count      = local.apps_servers ? 1 : 0
+  role       = aws_iam_role.apps_server[0].name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "apps_server" {
+  count = local.apps_servers ? 1 : 0
+  name  = "${var.name}-apps-server"
+  role  = aws_iam_role.apps_server[0].name
+}
+
+resource "aws_launch_template" "apps_server" {
+  count                  = local.apps_servers ? 1 : 0
+  name                   = "${var.name}-apps-server"
+  image_id               = data.aws_ssm_parameter.ecs_ami[0].value
+  instance_type          = var.apps_server_type
+  update_default_version = true
+
+  iam_instance_profile {
+    arn = aws_iam_instance_profile.apps_server[0].arn
+  }
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.apps[0].id]
+  }
+
+  # Apps run in containers one network hop away from the server, so a hop limit of 1 keeps them from
+  # reaching the instance metadata service and the server's role.
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  user_data = base64encode(<<-EOF
+    #!/bin/bash
+    cat >>/etc/ecs/ecs.config <<CONFIG
+    ECS_CLUSTER=${var.name}
+    ECS_ENABLE_TASK_IAM_ROLE=false
+    ECS_IMAGE_PULL_BEHAVIOR=prefer-cached
+    CONFIG
+  EOF
+  )
+
+  tag_specifications {
+    resource_type = "instance"
+    tags          = { Name = "${var.name}-apps" }
+  }
+}
+
+resource "aws_autoscaling_group" "apps" {
+  count               = local.apps_servers ? 1 : 0
+  name                = "${var.name}-apps"
+  min_size            = 1
+  max_size            = var.apps_servers_max
+  vpc_zone_identifier = data.aws_subnets.default.ids
+  # ECS decides which servers may go (only empty ones); ./deploy.sh destroy removes them all.
+  protect_from_scale_in = true
+  force_delete          = true
+
+  launch_template {
+    id      = aws_launch_template.apps_server[0].id
+    version = "$Latest"
+  }
+
+  tag {
+    key                 = "AmazonECSManaged"
+    value               = "true"
+    propagate_at_launch = true
+  }
+
+  lifecycle {
+    ignore_changes = [desired_capacity]
+  }
+}
+
+resource "aws_ecs_capacity_provider" "apps" {
+  count = local.apps_servers ? 1 : 0
+  name  = "${var.name}-apps"
+
+  auto_scaling_group_provider {
+    auto_scaling_group_arn         = aws_autoscaling_group.apps[0].arn
+    managed_termination_protection = "ENABLED"
+    managed_draining               = "ENABLED"
+
+    managed_scaling {
+      status                    = "ENABLED"
+      target_capacity           = 100
+      minimum_scaling_step_size = 1
+      maximum_scaling_step_size = 1
+    }
   }
 }
 
@@ -197,9 +323,9 @@ resource "aws_efs_mount_target" "workspaces" {
 # Apps' live databases and sandboxes' preview databases live on the server's Postgres; only the
 # cluster's security groups reach it.
 resource "aws_security_group_rule" "cluster_postgres" {
-  for_each                 = { for name, on in { apps = local.apps_fargate, sandboxes = local.sandboxes_fargate } : name => on if on }
+  for_each                 = { for name, on in { apps = local.apps_cluster, sandboxes = local.sandboxes_fargate } : name => on if on }
   type                     = "ingress"
-  description              = "Agency tasks on Fargate to their databases"
+  description              = "Agency tasks in the cluster to their databases"
   security_group_id        = aws_security_group.agency.id
   from_port                = 5432
   to_port                  = 5432
@@ -254,10 +380,12 @@ resource "aws_iam_role_policy" "cluster" {
       },
       {
         Effect    = "Allow"
-        Action    = ["ecs:StopTask", "ecs:ListTasks", "ecs:DescribeTasks"]
+        Action    = ["ecs:StopTask", "ecs:ListTasks", "ecs:DescribeTasks", "ecs:DescribeContainerInstances"]
         Resource  = "*"
         Condition = { ArnEquals = { "ecs:cluster" = local.cluster_arn } }
       },
+      # The apps servers' private addresses, for routes to the apps on them.
+      { Effect = "Allow", Action = ["ec2:DescribeInstances"], Resource = "*" },
       # Task definitions can't be limited by family in IAM; they only describe what a task may run.
       { Effect = "Allow", Action = ["ecs:RegisterTaskDefinition", "ecs:DescribeTaskDefinition", "ecs:TagResource"], Resource = "*" },
       {

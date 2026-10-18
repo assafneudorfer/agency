@@ -2,13 +2,14 @@ import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ApplicationAutoScalingClient } from "@aws-sdk/client-application-auto-scaling";
+import { EC2Client } from "@aws-sdk/client-ec2";
 import { DescribeImagesCommand, DescribeRepositoriesCommand, ECRClient, GetAuthorizationTokenCommand } from "@aws-sdk/client-ecr";
 import { DescribeTasksCommand, ECSClient, ListTasksCommand, type Task } from "@aws-sdk/client-ecs";
 import { config } from "./config.ts";
 import { docker } from "./docker.ts";
 
 /**
- * What published apps on Fargate and sandboxes on Fargate share: AWS clients signed with the cluster
+ * What published apps and sandboxes in the ECS cluster share: AWS clients signed with the cluster
  * role's short-lived keys (the host assumes and refreshes the role; nothing is stored), image uploads to
  * ECR, and the Traefik routes file that points host names at tasks' private addresses.
  */
@@ -32,6 +33,7 @@ const clientConfig = { region: config.awsRegion, credentials };
 export const ecs = new ECSClient(clientConfig);
 export const ecr = new ECRClient(clientConfig);
 export const scaling = new ApplicationAutoScalingClient(clientConfig);
+export const ec2 = new EC2Client(clientConfig);
 
 const repositoryUris = new Map<string, string>();
 
@@ -120,7 +122,7 @@ export interface Route {
 
 /** Writes a Traefik file-provider config, replacing the file at once so Traefik never reads half of it. */
 export async function writeRoutes(file: string, routes: Route[]): Promise<void> {
-	const header = "# Written by the Agency platform: routes to tasks on AWS Fargate. Do not edit.";
+	const header = "# Written by the Agency platform: routes to tasks in the ECS cluster. Do not edit.";
 	const lines = [header];
 	// Traefik rejects empty routers or services maps, so no routes means a file with no configuration.
 	if (routes.length > 0) {
@@ -145,7 +147,7 @@ export async function writeRoutes(file: string, routes: Route[]): Promise<void> 
 	await rename(`${path}.partial`, path);
 }
 
-/** Removes a routes file left from running on Fargate, so its host names don't point at tasks that are gone. */
+/** Removes a routes file left from running in the cluster, so its host names don't point at tasks that are gone. */
 export async function removeRoutes(file: string): Promise<void> {
 	await rm(join(config.ecs.routesDir, file), { force: true }).catch(() => {});
 }

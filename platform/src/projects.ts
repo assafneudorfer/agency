@@ -1,8 +1,10 @@
 import type { TeamAccess } from "./access.ts";
-import { config, previewHost } from "./config.ts";
+import { config } from "./config.ts";
 import { decryptJson, encryptJson, randomToken } from "./crypto.ts";
+import { appRuntime } from "./apps.ts";
 import { pool, query, queryOne } from "./db.ts";
-import { containerState, docker, imageId, envArgs, labelArgs, routeLabels } from "./docker.ts";
+import { docker } from "./docker.ts";
+import { sandboxes } from "./sandboxes.ts";
 
 export interface Project {
 	id: string;
@@ -142,6 +144,16 @@ export async function ensureLiveDatabase(project: Project, onLog: (line: string)
 }
 
 /** Environment shared by the sandbox and published containers. Holds no organization secrets. */
+/** Environment of the published app: its live database, the data gateway and its token. */
+export async function publishedEnv(project: Project): Promise<Record<string, string>> {
+	const env = appEnv(project);
+	return {
+		DATABASE_URL: await ensureLiveDatabase(project),
+		AGENCY_GATEWAY_URL: env.AGENCY_GATEWAY_URL,
+		AGENCY_APP_TOKEN: env.AGENCY_APP_TOKEN,
+	};
+}
+
 export function appEnv(project: Project): Record<string, string> {
 	return {
 		DATABASE_URL: projectDatabaseUrl(project),
@@ -152,7 +164,7 @@ export function appEnv(project: Project): Record<string, string> {
 	};
 }
 
-function sandboxEnv(project: Project): Record<string, string> {
+export function sandboxEnv(project: Project): Record<string, string> {
 	return { ...appEnv(project), AGENCY_DEV_ORIGINS: `*.${config.baseDomain}` };
 }
 
@@ -186,61 +198,23 @@ export async function listProjects(): Promise<Project[]> {
 	return query<Project>("select * from projects order by created_at desc");
 }
 
-/** True when the sandbox exists but was made from an older sandbox image than the current one. */
-export async function sandboxOutdated(project: Project): Promise<boolean> {
-	const [current, latest] = await Promise.all([imageId(sandboxName(project), "container"), imageId(config.sandboxImage, "image")]);
-	return Boolean(current && latest && current !== latest);
+/**
+ * Creates or starts the project's sandbox: the Next.js dev server and pi, with the workspace kept across
+ * restarts. With `upgrade`, a sandbox made from an older image is recreated from the current one (the
+ * workspace stays), so existing apps pick up a new system prompt and template helpers. Only upgrade while
+ * the agent is idle.
+ */
+export function ensureSandbox(project: Project, options: { upgrade?: boolean } = {}): Promise<void> {
+	return sandboxes.ensure(project, options);
 }
 
-/**
- * Creates or starts the project's sandbox: a container running the Next.js dev server with the workspace volume.
- * With `upgrade`, a sandbox made from an older image is recreated from the current one (the workspace volume
- * stays), so existing apps pick up a new system prompt and template helpers. Only upgrade while the agent is idle.
- */
-export async function ensureSandbox(project: Project, options: { upgrade?: boolean } = {}): Promise<void> {
-	const name = sandboxName(project);
-	if (options.upgrade && (await sandboxOutdated(project))) await docker(["rm", "-f", name]);
-	const state = await containerState(name);
-	if (state === "running") return;
-	if (state === "stopped") {
-		await docker(["start", name]);
-		return;
-	}
-	await docker([
-		"run",
-		"-d",
-		"--name",
-		name,
-		"--hostname",
-		project.slug,
-		"--network",
-		config.dockerNetwork,
-		"--restart",
-		"unless-stopped",
-		"--memory",
-		config.sandboxMemory,
-		"--cpus",
-		config.sandboxCpus,
-		"--pids-limit",
-		"1024",
-		"-v",
-		`agency-ws-${project.slug}:/workspace`,
-		...envArgs(sandboxEnv(project)),
-		...labelArgs({
-			"agency.project": project.id,
-			"agency.role": "sandbox",
-			...routeLabels(`sbx-${project.slug}`, previewHost(project.slug), 3000),
-		}),
-		config.sandboxImage,
-	]);
+export function sandboxOutdated(project: Project): Promise<boolean> {
+	return sandboxes.outdated(project);
 }
 
 export async function deleteProject(project: Project): Promise<void> {
-	await docker(["rm", "-f", sandboxName(project), appContainerName(project)], { allowFailure: true });
-	await docker(["volume", "rm", "-f", `agency-ws-${project.slug}`], { allowFailure: true });
-	const images = await docker(["images", "-q", `agency-app-${project.slug}`], { allowFailure: true });
-	const ids = images.stdout.split("\n").filter(Boolean);
-	if (ids.length > 0) await docker(["rmi", "-f", ...ids], { allowFailure: true });
+	await appRuntime.remove(project);
+	await sandboxes.remove(project);
 	await query("delete from projects where id = $1", [project.id]);
 	await dropDatabase(project.db_name);
 	if (project.live_db_name) await dropDatabase(project.live_db_name);

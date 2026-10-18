@@ -8,6 +8,7 @@ import { type AgentEvent, bridgeFor, CHAT_MODES, type ChatMode, dropBridge } fro
 import { type Attachment, checkAttachments, modelImages, promptWithAttachments, saveAttachments } from "./attachments.ts";
 import { AccessError, assertRole, atLeast, getSharing, type ProjectRole, projectRole, setMember, setTeamAccess, slugFromHost, visibleProjects } from "./access.ts";
 import { closeDataPools, DataError, deleteRow, insertRow, listTables, readRows, runSql, updateRow } from "./appdata.ts";
+import { appRuntime } from "./apps.ts";
 import { bedrockApp } from "./bedrock.ts";
 import {
 	type AppEnv,
@@ -40,11 +41,10 @@ import {
 	testConnection,
 } from "./connectors.ts";
 import { migrate, query } from "./db.ts";
-import { containerState, execIn } from "./docker.ts";
+import { execIn, sandboxes } from "./sandboxes.ts";
 import { FileError, listFiles, readFile, writeFile } from "./files.ts";
 import { gateway, mcpApp } from "./gateway.ts";
 import {
-	appContainerName,
 	createProject,
 	type DataEnv,
 	deleteProject,
@@ -53,7 +53,6 @@ import {
 	getProjectBySlug,
 	listProjects,
 	type Project,
-	sandboxName,
 	sandboxOutdated,
 } from "./projects.ts";
 import {
@@ -101,8 +100,8 @@ function errorMessage(error: unknown): string {
 
 async function projectView(project: Project, role: ProjectRole | null) {
 	const [sandbox, app, deployments] = await Promise.all([
-		containerState(sandboxName(project)),
-		containerState(appContainerName(project)),
+		sandboxes.state(project),
+		appRuntime.running(project),
 		listDeployments(project),
 	]);
 	const active = deployments.find((d) => d.active);
@@ -114,7 +113,7 @@ async function projectView(project: Project, role: ProjectRole | null) {
 		previewUrl: `${config.scheme}://${previewHost(project.slug)}`,
 		appUrl: `${config.scheme}://${appHost(project.slug)}`,
 		sandbox,
-		published: app === "running" && active ? active.version : null,
+		published: app && active ? active.version : null,
 		liveDatabase: Boolean(project.live_db_name),
 		agentRunning: bridgeFor(project).running,
 		role,
@@ -156,7 +155,7 @@ app.use("*", async (c, next) => {
 			controller.enqueue(
 				encoder.encode(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Starting ${name}</title>
 <body style="font:15px system-ui;margin:20vh auto;max-width:28rem;padding:0 16px;text-align:center;color:#555">
-<p>Starting ${name}…</p><p style="font-size:13px">It was asleep after a while without use. This takes a few seconds.</p>
+<p>Starting ${name}…</p><p style="font-size:13px">It was asleep after a while without use. This can take up to a minute.</p>
 `),
 			);
 			let ready = false;
@@ -446,19 +445,19 @@ api.post("/projects/:id/restart", async (c) => {
 	const { project } = await projectFor(c, "editor");
 	dropBridge(project.id);
 	await ensureSandbox(project);
-	await execIn(sandboxName(project), "pkill -f 'next dev' || true");
+	await execIn(project, "pkill -f 'next dev' || true");
 	return c.json({ ok: true });
 });
 
 api.get("/projects/:id/logs", async (c) => {
 	const { project } = await sandboxFor(c, "viewer");
-	const result = await execIn(sandboxName(project), "tail -n 200 /tmp/dev.log 2>/dev/null || true");
+	const result = await execIn(project, "tail -n 200 /tmp/dev.log 2>/dev/null || true");
 	return c.text(result.stdout);
 });
 
 api.get("/projects/:id/versions", async (c) => {
 	const { project } = await sandboxFor(c, "viewer");
-	const result = await execIn(sandboxName(project), "git log -n 50 --format='%h%x09%cI%x09%s'");
+	const result = await execIn(project, "git log -n 50 --format='%h%x09%cI%x09%s'");
 	const versions = result.stdout
 		.split("\n")
 		.filter(Boolean)
@@ -481,7 +480,7 @@ git diff --name-only --diff-filter=A ${commit} HEAD | xargs -r git rm -q --
 git add -A
 git diff --cached --quiet || git commit -q -m "Restore ${commit}"
 git rev-parse --short HEAD`;
-	const result = await execIn(sandboxName(project), script);
+	const result = await execIn(project, script);
 	if (result.code !== 0) return c.json({ error: result.stderr || result.stdout }, 400);
 	autoPush(project.id);
 	return c.json({ commit: result.stdout.trim() });
@@ -858,6 +857,8 @@ app.get("*", (c) => c.html(indexHtml));
 await migrate();
 await ensureAdmin();
 startIdleSweeper();
+appRuntime.start();
+sandboxes.start();
 serve({ fetch: app.fetch, port: config.port }, (info) => {
 	console.log(`agency platform listening on :${info.port} for ${config.publicUrl}`);
 });

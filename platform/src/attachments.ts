@@ -1,7 +1,7 @@
 import { posix } from "node:path";
-import { execArgv } from "./docker.ts";
 import { FileError } from "./files.ts";
-import { type Project, sandboxName } from "./projects.ts";
+import type { Project } from "./projects.ts";
+import { execArgv } from "./sandboxes.ts";
 
 /** Where chat attachments land in the workspace, so the agent (and the app) can read them. */
 export const UPLOAD_DIR = "uploads";
@@ -67,7 +67,7 @@ while [ -e "${UPLOAD_DIR}/$name" ] || [ -L "${UPLOAD_DIR}/$name" ]; do n=$((n + 
 cat > "${UPLOAD_DIR}/$name"
 printf '%s' "${UPLOAD_DIR}/$name"`;
 	for (const file of files) {
-		const result = await execArgv(sandboxName(project), ["bash", "-c", script, "upload", safeName(file.name)], {
+		const result = await execArgv(project, ["bash", "-c", script, "upload", safeName(file.name)], {
 			input: file.data,
 			timeoutMs: 60_000,
 		});

@@ -141,3 +141,47 @@ variable "backup_retention_days" {
   type        = number
   default     = 30
 }
+
+variable "app_runtime" {
+  description = "Where published apps run: docker (containers on the Agency server), ec2 (shared apps servers, many apps each, another server starts when they're full) or fargate (an ECS service per app on its own)"
+  type        = string
+  default     = "docker"
+  validation {
+    condition     = contains(["docker", "ec2", "fargate"], var.app_runtime)
+    error_message = "app_runtime must be docker, ec2 or fargate."
+  }
+}
+
+variable "apps_server_type" {
+  description = "Instance type of the apps servers (app_runtime = ec2). A t3.medium holds about 14 small apps."
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "apps_servers_max" {
+  description = "Most apps servers that may run at once (app_runtime = ec2); there is always at least one"
+  type        = number
+  default     = 4
+}
+
+variable "app_max_tasks" {
+  description = "Most tasks one published app scales out to on Fargate"
+  type        = number
+  default     = 3
+}
+
+variable "sandbox_runtime" {
+  description = "Where sandboxes run: docker (containers on the Agency server) or fargate (an ECS task per app that runs only while someone builds, workspace on EFS)"
+  type        = string
+  default     = "docker"
+  validation {
+    condition     = contains(["docker", "fargate"], var.sandbox_runtime)
+    error_message = "sandbox_runtime must be docker or fargate."
+  }
+}
+
+variable "sandbox_spot" {
+  description = "Run sandboxes on Fargate Spot (about 70% cheaper; AWS may stop one with two minutes' notice, the workspace stays)"
+  type        = bool
+  default     = true
+}

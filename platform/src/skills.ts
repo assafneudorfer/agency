@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { query, queryOne } from "./db.ts";
-import { execArgv } from "./docker.ts";
+import type { Project } from "./projects.ts";
+import { execArgv } from "./sandboxes.ts";
 import { githubReadToken } from "./github.ts";
 import { readZip } from "./zip.ts";
 
@@ -492,10 +493,10 @@ process.stdin.on("data", (d) => (input += d)).on("end", () => {
  * Copies the skills a member's builds load (theirs and the organization's) into the sandbox and returns the folders to pass to pi.
  * Returns the fingerprint of what was installed.
  */
-export async function installSkills(container: string, userId: string): Promise<{ dirs: string[]; fingerprint: string }> {
+export async function installSkills(project: Project, userId: string): Promise<{ dirs: string[]; fingerprint: string }> {
 	const fingerprint = await skillsFingerprint(userId);
 	const rows = await effectiveSkills<{ files: SkillFile[] }>(userId, "name, files");
-	const result = await execArgv(container, ["node", "-e", INSTALL_SCRIPT], {
+	const result = await execArgv(project, ["node", "-e", INSTALL_SCRIPT], {
 		input: JSON.stringify({ root: SANDBOX_SKILLS_DIR, skills: rows }),
 	});
 	if (result.code !== 0) throw new Error(`Could not copy skills into the sandbox: ${result.stderr.trim()}`);

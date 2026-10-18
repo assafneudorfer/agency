@@ -1,14 +1,14 @@
 import { allBridges, bridgeIfAny, dropBridge } from "./agent.ts";
 import { config } from "./config.ts";
-import { docker, execIn } from "./docker.ts";
-import { ensureSandbox, getProject, type Project, sandboxName } from "./projects.ts";
+import { execIn, sandboxes } from "./sandboxes.ts";
+import { ensureSandbox, getProject, type Project } from "./projects.ts";
 
 /**
  * Puts unused apps to sleep so a small server holds many apps. An app is in use while someone has
  * its builder open, its agent is working, or its preview gets requests. After a quiet spell its pi
- * process ends (the session is kept on disk), and later its sandbox container stops (files, history
+ * process ends (the session is kept on disk), and later its sandbox stops (files, history
  * and data stay in its volume and database). Opening the builder or the preview starts it again.
- * Published apps run in their own container and never sleep.
+ * Published apps never sleep.
  */
 
 const lastActive = new Map<string, number>();
@@ -47,16 +47,8 @@ export async function wake(project: Project): Promise<void> {
 /** Waits until the sandbox's dev server answers, so a woken preview doesn't load into an error. */
 export async function waitForDevServer(project: Project, seconds = 60): Promise<boolean> {
 	const script = `for i in $(seq 1 ${seconds}); do curl -s -o /dev/null --max-time 20 http://localhost:3000/ && exit 0; sleep 1; done; exit 1`;
-	const result = await execIn(sandboxName(project), script, (seconds + 30) * 1000);
+	const result = await execIn(project, script, (seconds + 30) * 1000);
 	return result.code === 0;
-}
-
-async function runningSandboxes(): Promise<string[]> {
-	const result = await docker(
-		["ps", "--filter", "label=agency.role=sandbox", "--filter", "status=running", "--format", '{{.Label "agency.project"}}'],
-		{ allowFailure: true },
-	);
-	return result.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
 /** One pass: ends idle pi processes, then stops sandboxes that stayed idle longer. */
@@ -72,13 +64,13 @@ export async function sweep(): Promise<void> {
 		}
 	}
 	if (sandboxIdle > 0) {
-		for (const id of await runningSandboxes()) {
+		for (const id of await sandboxes.runningProjects()) {
 			if (quietFor(id) < sandboxIdle) continue;
 			const project = await getProject(id);
 			if (!project) continue;
 			console.log(`[idle] ${project.slug}: stopping idle sandbox`);
 			dropBridge(id);
-			await docker(["stop", "-t", "10", sandboxName(project)], { allowFailure: true });
+			await sandboxes.stop(project);
 		}
 	}
 }

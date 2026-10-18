@@ -41,41 +41,6 @@ export function spawnDocker(args: string[]): ChildProcess {
 	return spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
 }
 
-/** Runs a shell command inside a container as root in /workspace. */
-export function execIn(container: string, script: string, timeoutMs = 120_000): Promise<RunResult> {
-	return docker(["exec", "-w", "/workspace", container, "bash", "-lc", script], { allowFailure: true, timeoutMs });
-}
-
-/**
- * Runs a command (no shell interpolation of arguments) inside a container in /workspace, optionally
- * writing `input` to its stdin. Output stays binary so file contents survive intact.
- */
-export function execArgv(
-	container: string,
-	argv: string[],
-	options: { input?: Buffer | string; timeoutMs?: number } = {},
-): Promise<{ code: number; stdout: Buffer; stderr: string }> {
-	return new Promise((resolve, reject) => {
-		const interactive = options.input !== undefined ? ["-i"] : [];
-		const child = spawn("docker", ["exec", ...interactive, "-w", "/workspace", container, ...argv], {
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		const chunks: Buffer[] = [];
-		let stderr = "";
-		child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
-		child.stderr.on("data", (chunk) => {
-			stderr += chunk;
-		});
-		const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs ?? 30_000);
-		child.on("error", reject);
-		child.on("close", (code) => {
-			clearTimeout(timer);
-			resolve({ code: code ?? 1, stdout: Buffer.concat(chunks), stderr });
-		});
-		child.stdin.end(options.input);
-	});
-}
-
 export async function containerState(name: string): Promise<"running" | "stopped" | "missing"> {
 	const result = await docker(["inspect", "-f", "{{.State.Running}}", name], { allowFailure: true });
 	if (result.code !== 0) return "missing";

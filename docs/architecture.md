@@ -1,0 +1,32 @@
+# How Agency works
+
+[Back to the README](../README.md)
+
+```
+          Cloudflare or Route 53 DNS: agency.example.com and *.agency.example.com -> EC2
+                                          |
+                                     Traefik (TLS, wildcard cert via a DNS challenge)
+            ______________________________|______________________________________
+           |                              |                                      |
+   agency.example.com            crm-preview.agency.example.com         crm.agency.example.com
+   platform (UI + API)           sandbox container per app              published app container
+     |  docker exec pi --mode rpc   - Next.js dev server :3000            - production build :3000
+     |------------------------->    - pi coding agent edits /workspace    - versioned image per publish
+     |
+     |  /mcp     <- pi inside the sandbox reads schemas and samples data
+     |  /gateway <- apps query data with their project token
+     |
+   Postgres: platform state + one database per app
+   Connections: org databases and MCP servers (credentials encrypted, only the platform holds them)
+```
+
+- **Platform** (`platform/`): Node 22 + Hono, TypeScript run directly with Node's type stripping, UI in Preact + htm with no build step; the code editor is CodeMirror 6, served as ES modules straight from `node_modules`. It manages users, projects, connections and deployments, and drives Docker through the socket.
+- **Sandbox** (`sandbox/`): one container per app with the Next.js template and pi installed from npm (version pinned by `PI_VERSION` in `sandbox/Dockerfile`). The platform runs `pi --mode rpc` inside it with `docker exec` and streams pi's events to the browser. Every finished agent turn is a git commit, so any version can be restored. The builder's **Code** tab shows the app's files and lets you edit them in the browser; each save writes the file into the sandbox, commits it as a version and reloads the preview.
+- **Sleeping apps**: an app nobody is using goes to sleep so a small server can hold many apps. Ten minutes after the builder closes and the agent is idle, its pi process ends (the chat session stays on disk); after 30 minutes without builder or preview traffic its sandbox container stops (files, versions and data stay). Opening the builder or the preview starts it again in a few seconds: a low-priority Traefik router sends a sleeping preview to the platform, which starts the sandbox and reloads the page. Published apps never sleep. Set `AGENCY_PI_IDLE_MINUTES` and `AGENCY_SANDBOX_IDLE_MINUTES` to change the times, or `0` to keep them running.
+- **Connectors**: admins add connections once. pi uses the platform's MCP endpoint (`list_connections`, `describe_connection`, `run_query`, `call_connector_tool`) while building; generated code calls `lib/agency.ts`, which posts to `/gateway` with the app's token. Postgres connections run read-only transactions unless an admin allows writes.
+- **Publishing**: `next build` in the sandbox, the standalone output is streamed into `docker build`, and the new image replaces the app container. Earlier versions stay as images for rollback.
+- **App databases**: every app gets its own Postgres database and login role on the platform's Postgres, so it costs no extra memory. The preview (and the coding agent) use one database and the published app another, created on the first publish: experiments while building never touch live data. A new app's live database starts empty and the app creates its tables from `lib/schema.ts`; an app published before this split starts with a copy of its existing data. The builder's **Data** tab lists both databases' tables, edits rows in place, adds and deletes rows, and runs SQL. Anyone can change preview data; live data takes the app's owner or an admin, and other members get read-only SQL.
+- **Who is using an app**: Traefik's forward auth passes the signed-in member to every preview and published app as `X-Agency-User`, `X-Agency-User-Id`, `X-Agency-User-Name` (URL-encoded) and `X-Agency-User-Role`, replacing any the browser sent. Generated apps read them with `currentUser()` from `lib/user.ts`, for "my items" views or recording who changed a row.
+- **Usage and budgets**: the cost of every message the agent writes (tokens at the model's list price) is charged to the user who sent the prompt. Each user has a monthly budget in US dollars, or is unlimited; when it is used up, new prompts are refused until an admin raises it or the month resets (the running step still finishes). Everyone sees their spend under **Settings > Usage** and in the sidebar; admins set budgets under **Settings > Team**. New members get `AGENCY_DEFAULT_BUDGET_USD` (20 by default); admins that existed before budgets start unlimited.
+- **Models and chat modes**: under **Settings > Organization > Models** an admin sees every Claude model the deploy's provider offers (Claude API or Bedrock), ticks the ones members may use and picks the organization default. Until then only the model the deploy was set up with is allowed. In the builder chat, members pick one of the allowed models and a mode: **Auto** builds right away (the default), **Plan** proposes a plan and waits for "Build this plan", **Chat** answers and discusses without changing files. Plan and Chat give the agent read-only tools (plus the organization data tools).
+- **Access**: previews and published apps sit behind Traefik forward auth, so only signed-in team members can open them, and each app's sharing settings decide who may view or edit it. With single sign-on on, only the organization's people can sign in at all.

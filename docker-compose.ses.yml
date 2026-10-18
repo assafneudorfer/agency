@@ -1,0 +1,13 @@
+# All-AWS setup, email: the platform sends email (such as "your app was taken offline") through Amazon SES.
+# infra/aws adds this file through COMPOSE_FILE in .env.
+#
+# No stored keys: the host assumes a send-only IAM role and refreshes its short-lived credentials under
+# /var/lib/agency/aws/mail; Terraform verifies the domain in SES with DKIM records in Route 53.
+services:
+  platform:
+    environment:
+      AGENCY_MAIL_CREDENTIALS_FILE: /aws-mail/credentials.json
+      AGENCY_MAIL_FROM: ${AGENCY_MAIL_FROM:?set AGENCY_MAIL_FROM in .env}
+      AGENCY_AWS_REGION: ${AGENCY_AWS_REGION:-us-east-1}
+    volumes:
+      - /var/lib/agency/aws/mail:/aws-mail:ro

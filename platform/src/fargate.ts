@@ -11,9 +11,11 @@ import {
 	DeleteServiceCommand,
 	DescribeContainerInstancesCommand,
 	DescribeServicesCommand,
+	ListContainerInstancesCommand,
 	type RegisterTaskDefinitionCommandInput,
 	RegisterTaskDefinitionCommand,
 	type Service,
+	UpdateContainerInstancesStateCommand,
 	UpdateServiceCommand,
 } from "@aws-sdk/client-ecs";
 import { type AppRuntime, removeLocalImages } from "./apps.ts";
@@ -143,9 +145,63 @@ async function syncRoutes(): Promise<void> {
 	);
 }
 
+// ---------------------------------------------------------------------------
+// Fewer apps servers when fewer apps run. ECS removes only empty servers and never moves running
+// tasks, so after apps go offline two half-empty servers would both stay. When the apps on the
+// least-used server fit in the room left on the others, it is drained: ECS starts each of its apps on
+// another server (binpack picks the fullest that fits) before stopping it there, so apps stay up, and
+// the capacity provider then removes the empty server.
+
+async function compactServers(): Promise<void> {
+	const arns: string[] = [];
+	let next: string | undefined;
+	do {
+		const page = await ecs.send(new ListContainerInstancesCommand({ cluster, nextToken: next }));
+		arns.push(...(page.containerInstanceArns ?? []));
+		next = page.nextToken;
+	} while (next);
+	if (arns.length < 2) return;
+	const found = await ecs.send(new DescribeContainerInstancesCommand({ cluster, containerInstances: arns }));
+	const all = found.containerInstances ?? [];
+	// One server at a time: the next is considered once the drained one is gone.
+	if (all.some((s) => s.status === "DRAINING")) return;
+	const amount = (list: typeof all[number]["registeredResources"], name: string) => list?.find((r) => r.name === name)?.integerValue ?? 0;
+	const servers = all
+		.filter((s) => s.status === "ACTIVE" && s.agentConnected)
+		.map((s) => ({
+			arn: s.containerInstanceArn!,
+			tasks: (s.runningTasksCount ?? 0) + (s.pendingTasksCount ?? 0),
+			usedMemory: amount(s.registeredResources, "MEMORY") - amount(s.remainingResources, "MEMORY"),
+			usedCpu: amount(s.registeredResources, "CPU") - amount(s.remainingResources, "CPU"),
+			freeMemory: amount(s.remainingResources, "MEMORY"),
+			freeCpu: amount(s.remainingResources, "CPU"),
+		}));
+	if (servers.length < 2) return;
+	servers.sort((a, b) => a.tasks - b.tasks || a.usedMemory - b.usedMemory);
+	const [emptiest, ...others] = servers;
+	// An empty server goes on its own; the capacity provider removes it.
+	if (emptiest.tasks === 0) return;
+	// Room for every app per server, not just in total, so no task waits for a new server.
+	const room = others.map((s) => ({ memory: s.freeMemory, cpu: s.freeCpu }));
+	for (let i = 0; i < emptiest.tasks; i++) {
+		const target = room.filter((r) => r.memory >= pool.memoryReservationMb && r.cpu >= pool.cpu).sort((a, b) => a.memory - b.memory)[0];
+		if (!target) return;
+		target.memory -= pool.memoryReservationMb;
+		target.cpu -= pool.cpu;
+	}
+	// Leave a little headroom, so the move doesn't fill the others to the last app.
+	const freeAfter = room.reduce((sum, r) => sum + Math.floor(r.memory / pool.memoryReservationMb), 0);
+	if (freeAfter < 2) return;
+	console.log(`[fargate] moving ${emptiest.tasks} app(s) off an apps server so it can be removed`);
+	await ecs.send(new UpdateContainerInstancesStateCommand({ cluster, containerInstances: [emptiest.arn], status: "DRAINING" }));
+}
+
 /** After a switch to Fargate, apps published earlier move over with the version they had. */
 async function moveExistingApps(): Promise<void> {
-	const active = await query<{ project_id: string; image: string }>("select project_id, image from deployments where active");
+	// Apps taken down for lack of visits stay down; their next visit starts them in the cluster.
+	const active = await query<{ project_id: string; image: string }>(
+		"select d.project_id, d.image from deployments d join projects p on p.id = d.project_id where d.active and p.app_asleep_since is null",
+	);
 	for (const deployment of active) {
 		const project = await getProject(deployment.project_id);
 		if (!project || (await describe(project))) continue;
@@ -290,5 +346,10 @@ export const fargateRuntime: AppRuntime = {
 				.catch((error) => console.error(`[fargate] could not refresh routes: ${error instanceof Error ? error.message : error}`))
 				.finally(() => setTimeout(tick, 15_000).unref());
 		tick();
+		if (onServers) {
+			setInterval(() => {
+				compactServers().catch((error) => console.error(`[fargate] could not free an apps server: ${error instanceof Error ? error.message : error}`));
+			}, 10 * 60_000).unref();
+		}
 	},
 };

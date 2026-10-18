@@ -16,11 +16,14 @@ data "aws_caller_identity" "current" {}
 locals {
   route53 = var.dns_provider == "route53"
   bedrock = var.llm_provider == "bedrock"
+  # Email through Amazon SES needs the domain verified with DKIM records, so it comes with Route 53.
+  ses = local.route53
   # Compose overrides for the all-AWS pieces (see docker-compose.route53.yml and docker-compose.bedrock.yml).
   compose_files = join(":", concat(
     ["docker-compose.yml"],
     local.route53 ? ["docker-compose.route53.yml"] : [],
     local.bedrock ? ["docker-compose.bedrock.yml"] : [],
+    local.ses ? ["docker-compose.ses.yml"] : [],
     local.cluster ? ["docker-compose.cluster.yml"] : [],
   ))
 }
@@ -89,6 +92,7 @@ resource "aws_ssm_parameter" "env" {
     "AGENCY_MODEL=${var.agency_model}",
     "AGENCY_SANDBOX_MEMORY=${var.sandbox_memory}",
     "AGENCY_SANDBOX_CPUS=${var.sandbox_cpus}",
+    "AGENCY_APP_IDLE_DAYS=${var.app_idle_days}",
     "AGENCY_BACKUP_BUCKET=${aws_s3_bucket.backups.bucket}",
     "AGENCY_AWS_REGION=${var.aws_region}",
     ],
@@ -98,6 +102,10 @@ resource "aws_ssm_parameter" "env" {
       "AGENCY_DNS_ROLE_ARN=${aws_iam_role.dns[0].arn}",
     ] : ["CLOUDFLARE_DNS_API_TOKEN=${var.cloudflare_dns_api_token}"],
     local.bedrock ? ["AGENCY_BEDROCK_ROLE_ARN=${aws_iam_role.bedrock[0].arn}"] : [],
+    local.ses ? [
+      "AGENCY_MAIL_ROLE_ARN=${aws_iam_role.mail[0].arn}",
+      "AGENCY_MAIL_FROM=Agency <agency@${var.base_domain}>",
+    ] : [],
     local.cluster ? [
       "AGENCY_APP_RUNTIME=${var.app_runtime}",
       "AGENCY_SANDBOX_RUNTIME=${var.sandbox_runtime}",
@@ -209,6 +217,52 @@ resource "aws_iam_role_policy" "bedrock" {
   })
 }
 
+# Email (all-AWS setup): the platform sends through SES from the base domain, verified with DKIM records
+# in the zone. A third narrow role can only send email. New SES accounts start in the sandbox, where
+# email reaches only verified addresses until AWS grants production access (docs/deploy.md).
+resource "aws_ses_domain_identity" "mail" {
+  count  = local.ses ? 1 : 0
+  domain = var.base_domain
+}
+
+resource "aws_ses_domain_dkim" "mail" {
+  count  = local.ses ? 1 : 0
+  domain = aws_ses_domain_identity.mail[0].domain
+}
+
+resource "aws_route53_record" "mail_dkim" {
+  count   = local.ses ? 3 : 0
+  zone_id = var.route53_zone_id
+  name    = "${aws_ses_domain_dkim.mail[0].dkim_tokens[count.index]}._domainkey.${var.base_domain}"
+  type    = "CNAME"
+  ttl     = 1800
+  records = ["${aws_ses_domain_dkim.mail[0].dkim_tokens[count.index]}.dkim.amazonses.com"]
+}
+
+resource "aws_iam_role" "mail" {
+  count = local.ses ? 1 : 0
+  name  = "${var.name}-mail"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.instance.arn }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy" "mail" {
+  count = local.ses ? 1 : 0
+  name  = "send-email"
+  role  = aws_iam_role.mail[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["ses:SendEmail"]
+      # The sender's identity, and recipients' identities while the account is in the SES sandbox.
+      Resource = "arn:aws:ses:${var.aws_region}:${data.aws_caller_identity.current.account_id}:identity/*"
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "assume_runtime_roles" {
   count = local.route53 || local.bedrock || local.cluster ? 1 : 0
   name  = "assume-runtime-roles"
@@ -218,7 +272,7 @@ resource "aws_iam_role_policy" "assume_runtime_roles" {
     Statement = [{
       Effect   = "Allow"
       Action   = "sts:AssumeRole"
-      Resource = concat(aws_iam_role.dns[*].arn, aws_iam_role.bedrock[*].arn, aws_iam_role.cluster[*].arn)
+      Resource = concat(aws_iam_role.dns[*].arn, aws_iam_role.bedrock[*].arn, aws_iam_role.mail[*].arn, aws_iam_role.cluster[*].arn)
     }]
   })
 }

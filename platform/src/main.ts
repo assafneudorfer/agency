@@ -8,6 +8,7 @@ import { type AgentEvent, bridgeFor, CHAT_MODES, type ChatMode, dropBridge } fro
 import { type Attachment, checkAttachments, modelImages, promptWithAttachments, saveAttachments } from "./attachments.ts";
 import { AccessError, assertRole, atLeast, getSharing, type ProjectRole, projectRole, setMember, setTeamAccess, slugFromHost, visibleProjects } from "./access.ts";
 import { closeDataPools, DataError, deleteRow, insertRow, listTables, readRows, runSql, updateRow } from "./appdata.ts";
+import { startAppIdleSweeper, wakeApp } from "./app-idle.ts";
 import { appRuntime } from "./apps.ts";
 import { bedrockApp } from "./bedrock.ts";
 import {
@@ -27,6 +28,7 @@ import {
 } from "./auth.ts";
 import { appHost, config, previewHost } from "./config.ts";
 import { startIdleSweeper, touch, waitForDevServer, wake, watch } from "./idle.ts";
+import { canSendMail, MailError, mailView, removeSmtp, saveSmtp, sendMail } from "./mail.ts";
 import {
 	CONNECTION_KINDS,
 	type ConnectionConfig,
@@ -105,6 +107,7 @@ async function projectView(project: Project, role: ProjectRole | null) {
 		listDeployments(project),
 	]);
 	const active = deployments.find((d) => d.active);
+	const asleep = Boolean(active && project.app_asleep_since && !app);
 	return {
 		id: project.id,
 		slug: project.slug,
@@ -113,7 +116,9 @@ async function projectView(project: Project, role: ProjectRole | null) {
 		previewUrl: `${config.scheme}://${previewHost(project.slug)}`,
 		appUrl: `${config.scheme}://${appHost(project.slug)}`,
 		sandbox,
-		published: app && active ? active.version : null,
+		published: active && (app || asleep) ? active.version : null,
+		// Taken down after days without visits; its next visit starts it again.
+		appAsleepSince: asleep ? project.app_asleep_since : null,
 		liveDatabase: Boolean(project.live_db_name),
 		agentRunning: bridgeFor(project).running,
 		role,
@@ -129,7 +134,7 @@ app.onError((error, c) => {
 	if (error instanceof DataError) return c.json({ error: error.message }, 400);
 	if (error instanceof AccessError) return c.json({ error: error.message }, 403);
 	if (error instanceof FileError) return c.json({ error: error.message }, 400);
-	if (error instanceof GitHubError || error instanceof SsoError || error instanceof SkillError || error instanceof ModelError) return c.json({ error: error.message }, 400);
+	if (error instanceof GitHubError || error instanceof MailError || error instanceof SsoError || error instanceof SkillError || error instanceof ModelError) return c.json({ error: error.message }, 400);
 	if (error instanceof NotFoundError) return c.json({ error: error.message }, 404);
 	console.error(error);
 	return c.json({ error: errorMessage(error) }, 500);
@@ -137,39 +142,60 @@ app.onError((error, c) => {
 
 app.get("/healthz", (c) => c.text("ok"));
 
-// A sleeping app's preview has no route of its own while its sandbox is stopped, so Traefik's fallback
-// router (platform-wake in docker-compose.yml) sends the request here. This starts the sandbox, shows a
-// short "starting" page, and reloads into the app once its dev server answers.
-app.use("*", async (c, next) => {
-	const host = (c.req.header("Host") ?? "").split(":")[0].toLowerCase();
-	if (!host.endsWith(`-preview.${config.baseDomain}`)) return next();
-	const slug = slugFromHost(host, config.baseDomain);
-	const project = slug ? await getProjectBySlug(slug) : undefined;
-	const user = await currentUser(c);
-	if (!user) return c.redirect(`${config.publicUrl}/?next=${encodeURIComponent(`${config.scheme}://${host}${c.req.path}`)}`, 302);
-	if (!project || !(await projectRole(user, project))) return c.text("App not found", 404);
-	const name = project.name.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+/** A page that says the app is starting, streamed while `start` runs, then reloads into the app. */
+function startingPage(name: string, why: string, start: () => Promise<boolean>): Response {
+	const safe = name.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 	const encoder = new TextEncoder();
 	const body = new ReadableStream<Uint8Array>({
 		async start(controller) {
 			controller.enqueue(
-				encoder.encode(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Starting ${name}</title>
+				encoder.encode(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Starting ${safe}</title>
 <body style="font:15px system-ui;margin:20vh auto;max-width:28rem;padding:0 16px;text-align:center;color:#555">
-<p>Starting ${name}…</p><p style="font-size:13px">It was asleep after a while without use. This can take up to a minute.</p>
+<p>Starting ${safe}…</p><p style="font-size:13px">${why}</p>
 `),
 			);
 			let ready = false;
 			try {
-				await wake(project);
-				ready = await waitForDevServer(project);
+				ready = await start();
 			} catch (error) {
-				console.error(`[idle] ${project.slug}: could not wake: ${errorMessage(error)}`);
+				console.error(`[wake] ${name}: could not start: ${errorMessage(error)}`);
 			}
 			controller.enqueue(encoder.encode(ready ? "<script>location.reload()</script>" : "<p>It is taking longer than usual. <a href=\"\">Try again</a></p>"));
 			controller.close();
 		},
 	});
-	return c.body(body, 503, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+	return new Response(body, { status: 503, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+}
+
+// A sleeping preview, or a published app taken down for lack of visits, has no route of its own, so
+// Traefik's fallback router (platform-wake in docker-compose.yml) sends the request here. This starts it,
+// shows a short "starting" page, and reloads into the app once it answers.
+app.use("*", async (c, next) => {
+	const host = (c.req.header("Host") ?? "").split(":")[0].toLowerCase();
+	const slug = slugFromHost(host, config.baseDomain);
+	if (!slug) return next();
+	const project = await getProjectBySlug(slug);
+	const user = await currentUser(c);
+	if (!user) return c.redirect(`${config.publicUrl}/?next=${encodeURIComponent(`${config.scheme}://${host}${c.req.path}`)}`, 302);
+	if (!project || !(await projectRole(user, project))) return c.text("App not found", 404);
+	if (host === previewHost(slug)) {
+		return startingPage(project.name, "It was asleep after a while without use. This can take up to a minute.", async () => {
+			await wake(project);
+			return waitForDevServer(project);
+		});
+	}
+	const active = (await listDeployments(project)).find((d) => d.active);
+	if (!active) return c.text("This app isn't published", 404);
+	if (await appRuntime.running(project)) {
+		// Just started: Traefik picks up its route within a few seconds.
+		return c.html(`<!doctype html><meta http-equiv="refresh" content="3"><body style="font:15px system-ui;margin:20vh auto;text-align:center;color:#555">Starting…`, 503);
+	}
+	const why = project.app_asleep_since ? "Nobody had opened it for a while, so it was taken offline. " : "";
+	return startingPage(project.name, `${why}This can take a minute or two.`, async () => {
+		// Starting may outlast the page (a new apps server): the visitor's retry joins the same start.
+		const started = wakeApp(project).then(() => true);
+		return Promise.race([started, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 150_000))]);
+	});
 });
 app.get("/auth/verify", (c) => verifyForwardAuth(c));
 app.route("/gateway", gateway);
@@ -604,6 +630,14 @@ api.post("/projects/:id/rollback", async (c) => {
 	return c.json(await rollback(project, Number(version)));
 });
 
+// Starts a published app that was taken down for lack of visits, without waiting for a visitor.
+api.post("/projects/:id/wake-app", async (c) => {
+	const { project } = await projectFor(c, "editor");
+	if (!project.app_asleep_since) return c.json({ ok: true });
+	await wakeApp(project);
+	return c.json({ ok: true });
+});
+
 api.post("/projects/:id/unpublish", async (c) => {
 	const { project } = await projectFor(c, "editor");
 	await unpublish(project);
@@ -657,6 +691,24 @@ api.post("/projects/:id/github/push", async (c) => {
 api.get("/settings", requireAdmin, async (c) =>
 	c.json({ sso: await ssoView(), github: await gitHubView(), githubNewApps: await newAppsDefaults(), publicUrl: config.publicUrl }),
 );
+
+api.get("/settings/email", requireAdmin, async (c) => c.json({ ...(await mailView()), appIdleDays: config.appIdleDays }));
+
+api.put("/settings/email", requireAdmin, async (c) => c.json(await saveSmtp(await c.req.json())));
+
+api.delete("/settings/email", requireAdmin, async (c) => c.json(await removeSmtp()));
+
+// Sends a test email to the admin who asks, through whatever is set up.
+api.post("/settings/email/test", requireAdmin, async (c) => {
+	const user = c.get("user");
+	if (!(await canSendMail())) return c.json({ error: "Set up an SMTP server first" }, 400);
+	await sendMail({
+		to: user.email,
+		subject: "Test email from Agency",
+		text: `This is a test from ${config.publicUrl}. Email works: Agency can tell owners when their apps are taken offline.\n\nAgency`,
+	});
+	return c.json({ ok: true, to: user.email });
+});
 
 api.get("/settings/models", requireAdmin, async (c) => c.json(await modelSettings()));
 
@@ -857,6 +909,7 @@ app.get("*", (c) => c.html(indexHtml));
 await migrate();
 await ensureAdmin();
 startIdleSweeper();
+startAppIdleSweeper();
 appRuntime.start();
 sandboxes.start();
 serve({ fetch: app.fetch, port: config.port }, (info) => {

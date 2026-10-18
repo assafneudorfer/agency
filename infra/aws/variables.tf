@@ -130,6 +130,12 @@ variable "sandbox_cpus" {
   default = "2"
 }
 
+variable "app_idle_days" {
+  description = "Days a published app may go without a visit before it is taken down (its owner gets an email; the next visit starts it again). 0 keeps apps up."
+  type        = number
+  default     = 7
+}
+
 variable "agency_model" {
   description = "Optional pi model pattern, for example anthropic/claude-sonnet-4-5 or amazon-bedrock/us.anthropic.claude-opus-4-8"
   type        = string

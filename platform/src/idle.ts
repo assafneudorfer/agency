@@ -8,7 +8,7 @@ import { ensureSandbox, getProject, type Project } from "./projects.ts";
  * its builder open, its agent is working, or its preview gets requests. After a quiet spell its pi
  * process ends (the session is kept on disk), and later its sandbox stops (files, history
  * and data stay in its volume and database). Opening the builder or the preview starts it again.
- * Published apps never sleep.
+ * Published apps are taken down separately, after days without visits (app-idle.ts).
  */
 
 const lastActive = new Map<string, number>();

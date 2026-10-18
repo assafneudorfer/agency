@@ -84,7 +84,7 @@ if [ -n "$efs_id" ] && ! mountpoint -q /mnt/agency-efs; then
 	mkdir -p /mnt/agency-efs/workspaces
 	echo "Workspaces on EFS mounted at /mnt/agency-efs"
 fi
-if grep -qE '^AGENCY_(DNS|BEDROCK|CLUSTER)_ROLE_ARN=.' /opt/agency-src/.env 2>/dev/null; then
+if grep -qE '^AGENCY_(DNS|BEDROCK|MAIL|CLUSTER)_ROLE_ARN=.' /opt/agency-src/.env 2>/dev/null; then
 	had_dns=$([ -f /var/lib/agency/aws/dns/credentials.json ] && echo yes || true)
 	systemctl enable agency-aws-credentials.service >/dev/null
 	systemctl enable --now agency-aws-credentials.timer >/dev/null

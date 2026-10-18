@@ -547,11 +547,22 @@ delete_app_services() {
 	local cluster
 	cluster=$(terraform output -raw cluster 2>/dev/null || true)
 	[ -n "$cluster" ] && [ "$cluster" != "null" ] || return 0
-	info "Deleting published apps in the cluster"
-	for service in $(aws ecs list-services --region "$(region)" --cluster "$cluster" --query 'serviceArns[]' --output text); do
+	info "Deleting published apps and dev environments in the cluster"
+	for service in $(app_services "$cluster"); do
+		# Removes the app's scaling policy and its CloudWatch alarms too.
+		aws application-autoscaling deregister-scalable-target --region "$(region)" --service-namespace ecs \
+			--resource-id "service/$cluster/$service" --scalable-dimension ecs:service:DesiredCount >/dev/null 2>&1 || true
 		aws ecs delete-service --region "$(region)" --cluster "$cluster" --service "$service" --force >/dev/null
 	done
 	stop_sandboxes
+	# Task definitions the platform registered (one family per app and per sandbox).
+	local definitions
+	definitions=$(aws ecs list-task-definitions --region "$(region)" --family-prefix "$cluster-" --query 'taskDefinitionArns[]' --output text | tr '\t' '\n' | grep -E ":task-definition/$cluster-(app|sandbox)-" || true)
+	for definition in $definitions; do
+		aws ecs deregister-task-definition --region "$(region)" --task-definition "$definition" >/dev/null 2>&1 || true
+	done
+	# Deleting takes up to 10 at a time; a failure here leaves only free, inactive entries behind.
+	printf '%s\n' $definitions | xargs -r -n 10 aws ecs delete-task-definitions --region "$(region)" --task-definitions >/dev/null 2>&1 || true
 }
 
 case "$ACTION" in

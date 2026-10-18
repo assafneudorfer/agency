@@ -165,7 +165,7 @@ resource "aws_launch_template" "apps_server" {
   user_data = base64encode(<<-EOF
     #!/bin/bash
     cat >>/etc/ecs/ecs.config <<CONFIG
-    ECS_CLUSTER=${var.name}
+    ECS_CLUSTER=${aws_ecs_cluster.agency[0].name}
     ECS_ENABLE_TASK_IAM_ROLE=false
     ECS_IMAGE_PULL_BEHAVIOR=prefer-cached
     CONFIG

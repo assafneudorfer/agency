@@ -25,6 +25,9 @@ export interface Project {
 	github_auto_push: boolean;
 	github_pushed_commit: string | null;
 	github_pushed_at: string | null;
+	// Minutes the published app has run without a visit, and when it was taken down for that (app-idle.ts).
+	app_idle_minutes: number;
+	app_asleep_since: string | null;
 	created_at: string;
 }
 

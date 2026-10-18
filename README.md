@@ -122,7 +122,7 @@ Everything runs on one machine you control: a single AWS instance with Docker, s
 | Every turn is a restorable version | monday.com, Notion, Linear and any MCP server | Separate live database from the first publish | Monthly AI budgets per member, usage page |
 | Code tab with an in-browser editor | Read-only by default; connections can be limited to specific apps | Push to your GitHub organization, automatically for new apps | Personal and organization skills |
 | Auto, Plan and Chat modes, with a model picker | Each app gets its own Postgres database, with a Data tab | Nightly backups to S3 | Allowed Claude models and the organization default |
-| Phone layout, light and dark | | | One AWS server, or a server plus an ECS cluster that scales; idle apps sleep |
+| Phone layout, light and dark | | Published apps nobody opens for a week go offline (the owner gets an email) and start again on the next visit | One AWS server, or a server plus an ECS cluster that scales; idle apps sleep |
 
 What's next is in the [roadmap](PLAN.md): per-person connector sign-in, sandbox hardening (gVisor or Firecracker, egress allowlist).
 

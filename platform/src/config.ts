@@ -89,6 +89,14 @@ export const config = {
 	// Minutes without use before an app's agent process ends, and before its sandbox container stops. 0 keeps them running.
 	piIdleMinutes: Number(optional("AGENCY_PI_IDLE_MINUTES", "10")),
 	sandboxIdleMinutes: Number(optional("AGENCY_SANDBOX_IDLE_MINUTES", "30")),
+	// Days a published app may go without a visit before it is taken down and its owner gets an email. 0 keeps apps up.
+	appIdleDays: Number(optional("AGENCY_APP_IDLE_DAYS", "7")),
+	// Email from the platform. All-AWS setups send through Amazon SES with a send-only role whose short-lived
+	// keys the host refreshes; an admin can set an SMTP server in Settings instead (mail.ts).
+	mail: {
+		sesCredentialsFile: process.env.AGENCY_MAIL_CREDENTIALS_FILE ?? "",
+		from: process.env.AGENCY_MAIL_FROM ?? "",
+	},
 	webRoot: new URL("../web/", import.meta.url).pathname,
 	nodeModules: new URL("../node_modules/", import.meta.url).pathname,
 };

@@ -29,6 +29,7 @@ Rules of thumb:
 
 - A sandbox takes up to 3 GB of memory while someone builds in it. That is what fills a server, not the number of accounts.
 - Idle apps sleep in every profile after 30 minutes. On the server that frees memory; on Fargate it also stops the bill for that app.
+- Published apps nobody opens for a week (`app_idle_days`) go offline and their owner gets an email; the next visit starts them. That keeps apps servers from filling up with forgotten apps. Email needs SES (all on AWS; ask them to request SES production access) or an SMTP server in Settings > Email.
 - Published apps on the server are free until the server runs out of memory. On apps servers they cost about $36 a month per server of about 14 apps (about $2.60 an app when full), can't affect the builder, and a new server starts when they're full. On Fargate each app costs about $13 a month on its own; suggest it only when apps must be isolated from each other.
 - If the person isn't sure, recommend **Try it out**. `./deploy.sh profile` can move to Team or Organization later without losing data. Moving dev environments or published apps from the cluster back to the server isn't supported yet, so don't start on the cluster "just in case".
 
@@ -76,7 +77,7 @@ The full guide is [docs/deploy.md](docs/deploy.md).
 - `platform/`: Node 22 + Hono, TypeScript run directly by Node's type stripping (no build step), Preact UI in `platform/web`. Check it with `cd platform && npm run typecheck`.
   - `sandboxes.ts`: where sandboxes run, on the server through Docker or as Fargate tasks (`sandbox-fargate.ts`). All commands in a sandbox go through `sandboxes.spawn`, `execIn` and `execArgv`.
   - `apps.ts`: where published apps run, as containers on the server or as ECS services on shared apps servers or Fargate (`fargate.ts`). `ecs.ts` holds what the cluster runtimes share.
-  - `agent.ts`: the pi RPC bridge. `idle.ts`: putting apps to sleep. `publish.ts`: builds and versions.
+  - `agent.ts`: the pi RPC bridge. `idle.ts`: putting apps to sleep. `app-idle.ts`: taking down published apps without visits. `mail.ts`: email (SMTP or SES). `publish.ts`: builds and versions.
 - `sandbox/`: the sandbox image, with the Next.js template, the entrypoint and `sandboxd.mjs`.
 - `infra/aws/`: Terraform and `deploy.sh`. `cluster.tf` covers everything on ECS.
 - `docs/`: guides for users and admins. New features get a line in the README features table and details in the matching guide.

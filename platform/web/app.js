@@ -195,6 +195,8 @@ const ICONS = {
 	terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
 	globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
 	stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+	moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>',
+	mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
 	file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
 	folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
 	chevron: '<path d="m9 18 6-6-6-6"/>',
@@ -536,9 +538,11 @@ function Home() {
 									<span class="initial">${p.name.trim().slice(0, 1).toUpperCase()}</span>
 									${p.agentRunning
 										? html`<span class="badge accent"><span class="dot pulse"></span>Building</span>`
-										: p.published
-											? html`<span class="badge live"><span class="dot"></span>Live v${p.published}</span>`
-											: html`<span class="badge">Draft</span>`}
+										: p.appAsleepSince
+											? html`<span class="badge" title="Taken offline after days without visits. The next visit starts it again.">${icon("moon")} Asleep v${p.published}</span>`
+											: p.published
+												? html`<span class="badge live"><span class="dot"></span>Live v${p.published}</span>`
+												: html`<span class="badge">Draft</span>`}
 								</div>
 								<div class="meta">
 									<strong>${p.name} ${p.role === "viewer" && html`<span class="badge">View only</span>`}</strong>
@@ -822,9 +826,11 @@ function Builder({ id }) {
 				<h2>${project.name}</h2>
 				${running
 					? html`<span class="status"><span class="dot pulse"></span>Working</span>`
-					: project.published
-						? html`<span class="badge live hide-sm"><span class="dot"></span>Live v${project.published}</span>`
-						: null}
+					: project.appAsleepSince
+						? html`<span class="badge hide-sm">${icon("moon")} Asleep v${project.published}</span>`
+						: project.published
+							? html`<span class="badge live hide-sm"><span class="dot"></span>Live v${project.published}</span>`
+							: null}
 			</div>
 			<div class="center">
 				<div
@@ -1820,6 +1826,7 @@ function PublishPanel({ project, running, onChange }) {
 	const [deployments, setDeployments] = useState([]);
 	const [log, setLog] = useState([]);
 	const [busy, setBusy] = useState(false);
+	const [waking, setWaking] = useState(false);
 	const [error, setError] = useState("");
 	const load = () => api(`/projects/${project.id}/deployments`).then(setDeployments);
 	useEffect(() => {
@@ -1845,6 +1852,18 @@ function PublishPanel({ project, running, onChange }) {
 		load();
 		onChange();
 	};
+	const wakeNow = async () => {
+		setWaking(true);
+		setError("");
+		try {
+			await api(`/projects/${project.id}/wake-app`, { method: "POST" });
+			toast("The app is running again");
+		} catch (err) {
+			setError(err.message);
+		}
+		setWaking(false);
+		onChange();
+	};
 	const act = async (path, body) => {
 		try {
 			await api(`/projects/${project.id}/${path}`, { method: "POST", body });
@@ -1858,6 +1877,11 @@ function PublishPanel({ project, running, onChange }) {
 		<div class="callout">
 			Publishes to <a href=${project.appUrl} target="_blank" rel="noopener">${project.appUrl}</a>. Only people the app is shared with can open it.
 		</div>
+		${project.appAsleepSince &&
+		html`<div class="callout row">
+			<span class="grow">${icon("moon")} Offline since ${new Date(project.appAsleepSince).toLocaleDateString()}: nobody opened it for a while. The next visit starts it again.</span>
+			<button class="btn sm" disabled=${waking} onClick=${wakeNow}>${waking ? html`<span class="spinner"></span>` : icon("play")} Start now</button>
+		</div>`}
 		<div class="row">
 			<button class="btn primary grow" disabled=${busy || running} onClick=${run}>
 				${busy ? html`<span class="spinner"></span> Publishing` : html`${icon("globe")} Publish current version`}
@@ -3202,6 +3226,130 @@ function ModelSettings() {
 	</div>`;
 }
 
+/** Admin: how the platform sends email, such as telling owners their app was taken offline. */
+function EmailSettings() {
+	const [data, setData] = useState(null);
+	const [form, setForm] = useState(null);
+	const [busy, setBusy] = useState("");
+	const [error, setError] = useState("");
+	const show = (view) => {
+		setData((before) => ({ ...before, ...view }));
+		const smtp = view.smtp;
+		setForm({
+			host: smtp?.host ?? "",
+			port: smtp?.port ?? 587,
+			security: smtp?.security ?? "starttls",
+			username: smtp?.username ?? "",
+			password: "",
+			from: smtp?.from ?? "",
+		});
+	};
+	useEffect(() => {
+		api("/settings/email").then(show, (err) => setError(err.message));
+	}, []);
+	const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
+	const call = async (what, fn) => {
+		setBusy(what);
+		setError("");
+		try {
+			await fn();
+		} catch (err) {
+			setError(err.message);
+		}
+		setBusy("");
+	};
+	const save = (e) => {
+		e.preventDefault();
+		call("save", async () => {
+			show(await api("/settings/email", { method: "PUT", body: form }));
+			toast("SMTP server saved");
+		});
+	};
+	const test = () =>
+		call("test", async () => {
+			const sent = await api("/settings/email/test", { method: "POST" });
+			toast(`Test email sent to ${sent.to}`);
+		});
+	const remove = () =>
+		call("remove", async () => {
+			show(await api("/settings/email", { method: "DELETE" }));
+			toast("SMTP server removed");
+		});
+	const days = data?.appIdleDays;
+	const using = data?.smtp ? "Your SMTP server" : data?.ses ? "Amazon SES" : null;
+	return html`<div class="page">
+		<header class="page-head">
+			<h1>Email</h1>
+			<p>
+				How Agency sends email.
+				${days > 0 ? ` When a published app has no visits for ${days} ${days === 1 ? "day" : "days"}, it is taken offline and its owner gets an email; the next visit starts it again.` : ""}
+			</p>
+		</header>
+		${error && html`<p class="error">${error}</p>`}
+		${data === null || form === null
+			? !error && html`<div class="empty"><span class="spinner"></span></div>`
+			: html`<div class="stack">
+					<div class="card">
+						<div class="card-head row">
+							<h2 class="grow">${icon("mail")} Sending</h2>
+							${using ? html`<span class="badge live"><span class="dot"></span>${using}</span>` : html`<span class="badge warn">Not set up</span>`}
+						</div>
+						<div class="card-body">
+							<p class="muted" style="margin:0;font-size:13.5px">
+								${data.ses
+									? html`This server sends through Amazon SES as <span class="mono">${data.ses.from}</span>, set up by the deployment.
+											${data.smtp ? " Your SMTP server below is used instead." : " To use another server, set it below."}`
+									: data.smtp
+										? "Email goes out through the SMTP server below."
+										: "No email is sent until you set an SMTP server below. Owners won't hear when their apps are taken offline."}
+							</p>
+						</div>
+						${using && html`<div class="card-foot"><button class="btn" disabled=${Boolean(busy)} onClick=${test}>${busy === "test" && html`<span class="spinner"></span>`} Send me a test email</button></div>`}
+					</div>
+					<form class="card" onSubmit=${save}>
+						<div class="card-head">
+							<h2>SMTP server</h2>
+							<p>Any provider works: Google Workspace or Microsoft 365, SendGrid, Mailgun, Amazon SES, or your own server.</p>
+						</div>
+						<div class="card-body form-grid">
+							<label class="field">
+								<span>Host</span>
+								<input class="input mono" placeholder="smtp.example.com" value=${form.host} onInput=${set("host")} required />
+							</label>
+							<label class="field">
+								<span>Port</span>
+								<input class="input mono" type="number" value=${form.port} onInput=${set("port")} required />
+							</label>
+							<label class="field">
+								<span>Connection</span>
+								<select class="select" value=${form.security} onChange=${set("security")}>
+									<option value="starttls">STARTTLS (usually port 587)</option>
+									<option value="tls">TLS (usually port 465)</option>
+									<option value="none">No encryption</option>
+								</select>
+							</label>
+							<label class="field">
+								<span>Sender <span class="hint">the From address</span></span>
+								<input class="input" placeholder="Agency <agency@example.com>" value=${form.from} onInput=${set("from")} required />
+							</label>
+							<label class="field">
+								<span>User name</span>
+								<input class="input mono" autocomplete="off" value=${form.username} onInput=${set("username")} />
+							</label>
+							<label class="field">
+								<span>Password ${data.smtp?.hasPassword && html`<span class="hint">saved; leave empty to keep</span>`}</span>
+								<input class="input mono" type="password" autocomplete="new-password" value=${form.password} onInput=${set("password")} />
+							</label>
+						</div>
+						<div class="card-foot">
+							${data.smtp && html`<button type="button" class="btn danger" disabled=${Boolean(busy)} onClick=${remove}>Remove</button>`}
+							<button class="btn primary" disabled=${Boolean(busy)}>${busy === "save" && html`<span class="spinner"></span>`} Save</button>
+						</div>
+					</form>
+				</div>`}
+	</div>`;
+}
+
 // Settings sections, grouped the usual way: what is yours, then what the whole organization shares.
 const SETTINGS_GROUPS = [
 	{
@@ -3220,6 +3368,7 @@ const SETTINGS_GROUPS = [
 			{ key: "models", label: "Models", icon: "cpu", admin: true },
 			{ key: "sso", label: "Single sign-on", icon: "lock", admin: true },
 			{ key: "github", label: "GitHub", icon: "github", admin: true },
+			{ key: "email", label: "Email", icon: "mail", admin: true },
 		],
 	},
 ];
@@ -3239,6 +3388,7 @@ function Settings({ user, section, onUsageChange }) {
 		models: () => html`<${ModelSettings} />`,
 		sso: () => html`<${OrgSettings} key="sso" part="sso" />`,
 		github: () => html`<${OrgSettings} key="github" part="github" />`,
+		email: () => html`<${EmailSettings} />`,
 	}[current];
 	const nav = html`<nav class="settings-nav" aria-label="Settings">
 		${groups.map(

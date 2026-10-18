@@ -3,6 +3,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { projectRole, slugFromHost } from "./access.ts";
 import { config } from "./config.ts";
 import { hashPassword, randomToken, verifyPassword } from "./crypto.ts";
+import { recordAppVisit } from "./app-idle.ts";
 import { touch } from "./idle.ts";
 import { query, queryOne } from "./db.ts";
 import type { Project } from "./projects.ts";
@@ -150,8 +151,9 @@ export async function verifyForwardAuth(c: Context): Promise<Response> {
 				403,
 			);
 		}
-		// Preview traffic keeps the app's sandbox awake; published apps never sleep.
-		if (slug && (c.req.header("X-Forwarded-Host") ?? "").toLowerCase().startsWith(`${slug}-preview.`)) touch(project!.id);
+		// Preview traffic keeps the app's sandbox awake; visits keep the published app up (app-idle.ts).
+		if ((c.req.header("X-Forwarded-Host") ?? "").toLowerCase().startsWith(`${slug}-preview.`)) touch(project!.id);
+		else recordAppVisit(project!.id);
 		c.header("X-Agency-App-Role", role);
 		c.header("X-Agency-User", user.email);
 		c.header("X-Agency-User-Id", user.id);

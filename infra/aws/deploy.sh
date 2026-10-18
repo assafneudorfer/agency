@@ -381,6 +381,19 @@ deploy() {
 	chmod 600 terraform.tfstate* 2>/dev/null || true
 	wait_until_up "$(terraform output -raw url)"
 	echo "Sign in with $(setting admin_email) and the admin password you typed."
+	ses_notice
+}
+
+# Email goes out through Amazon SES in the all-AWS setup. A new account starts in SES's sandbox, where
+# email reaches only addresses verified in SES, so app owners wouldn't get their emails.
+ses_notice() {
+	[ "$(setting dns_provider cloudflare)" = route53 ] || return 0
+	[ "$(aws sesv2 get-account --region "$(region)" --query ProductionAccessEnabled --output text 2>/dev/null)" = False ] || return 0
+	echo
+	echo "Email: Agency sends email (such as \"your app was taken offline\") through Amazon SES, which this"
+	echo "AWS account uses in its sandbox: email reaches only addresses verified in SES. To email everyone,"
+	echo "request production access in the SES console (Account dashboard > Request production access),"
+	echo "or set an SMTP server in Agency under Settings > Email."
 }
 
 update() {

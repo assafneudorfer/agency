@@ -145,7 +145,10 @@ async function syncRoutes(): Promise<void> {
 
 /** After a switch to Fargate, apps published earlier move over with the version they had. */
 async function moveExistingApps(): Promise<void> {
-	const active = await query<{ project_id: string; image: string }>("select project_id, image from deployments where active");
+	// Apps taken down for lack of visits stay down; their next visit starts them in the cluster.
+	const active = await query<{ project_id: string; image: string }>(
+		"select d.project_id, d.image from deployments d join projects p on p.id = d.project_id where d.active and p.app_asleep_since is null",
+	);
 	for (const deployment of active) {
 		const project = await getProject(deployment.project_id);
 		if (!project || (await describe(project))) continue;

@@ -1,5 +1,6 @@
 import { appHost } from "./config.ts";
 import { query, queryOne } from "./db.ts";
+import { markAwake } from "./app-idle.ts";
 import { appRuntime } from "./apps.ts";
 import { spawnDocker } from "./docker.ts";
 import { execIn, sandboxes } from "./sandboxes.ts";
@@ -97,6 +98,7 @@ export async function publish(project: Project, userId: string, onLog: (line: st
 			"insert into deployments (project_id, version, image, git_commit, created_by, active) values ($1, $2, $3, $4, $5, true) returning *",
 			[project.id, version, image, commit, userId],
 		);
+		await markAwake(project.id);
 		return deployment!;
 	} finally {
 		publishing.delete(project.id);
@@ -111,10 +113,12 @@ export async function rollback(project: Project, version: number): Promise<Deplo
 	if (!target) throw new Error(`Version ${version} not found`);
 	await appRuntime.run(project, target.image, await publishedEnv(project), () => {});
 	await query("update deployments set active = (version = $2) where project_id = $1", [project.id, version]);
+	await markAwake(project.id);
 	return { ...target, active: true };
 }
 
 export async function unpublish(project: Project): Promise<void> {
 	await appRuntime.stop(project);
 	await query("update deployments set active = false where project_id = $1", [project.id]);
+	await markAwake(project.id);
 }

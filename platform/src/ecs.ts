@@ -14,8 +14,9 @@ import { docker } from "./docker.ts";
  * ECR, and the Traefik routes file that points host names at tasks' private addresses.
  */
 
-async function credentials() {
-	const data = JSON.parse(await readFile(config.ecs.credentialsFile, "utf8")) as {
+/** Reads credentials for an AWS SDK client from a credential_process file the host keeps fresh. */
+export async function credentialsFromFile(file: string) {
+	const data = JSON.parse(await readFile(file, "utf8")) as {
 		AccessKeyId: string;
 		SecretAccessKey: string;
 		SessionToken: string;
@@ -29,7 +30,7 @@ async function credentials() {
 	};
 }
 
-const clientConfig = { region: config.awsRegion, credentials };
+const clientConfig = { region: config.awsRegion, credentials: () => credentialsFromFile(config.ecs.credentialsFile) };
 export const ecs = new ECSClient(clientConfig);
 export const ecr = new ECRClient(clientConfig);
 export const scaling = new ApplicationAutoScalingClient(clientConfig);

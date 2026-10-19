@@ -2232,6 +2232,19 @@ code {
 	color: var(--text-2);
 }
 
+.role-select {
+	flex: none;
+}
+
+/* Your own role, where the others have a menu: same width so the columns line up. */
+.role-self {
+	flex: none;
+	min-width: 92px;
+	padding: 0 10px;
+	font-size: 12.5px;
+	color: var(--text-2);
+}
+
 .budget-editor {
 	display: flex;
 	align-items: center;
@@ -2372,6 +2385,23 @@ code {
 @media (max-width: 520px) {
 	.member-row {
 		flex-wrap: wrap;
+	}
+
+	/* Name on its own line, then role and buttons under it, lined up with the name. */
+	.member-row > .grow {
+		flex: 1 1 calc(100% - 38px);
+		min-width: 0;
+	}
+
+	.role-select,
+	.role-self {
+		margin-left: 38px;
+		margin-right: auto;
+	}
+
+	.role-self {
+		min-width: 0;
+		padding: 0;
 	}
 
 	.member-usage {

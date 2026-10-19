@@ -22,7 +22,9 @@ import {
 	logout,
 	requireAdmin,
 	requireUser,
+	RoleError,
 	safeNext,
+	setRole,
 	type User,
 	verifyForwardAuth,
 } from "./auth.ts";
@@ -863,6 +865,18 @@ api.patch("/users/:id/budget", requireAdmin, async (c) => {
 		return c.json({ error: errorMessage(error) }, 400);
 	}
 	return c.json(await usageFor(c.req.param("id")));
+});
+
+api.patch("/users/:id/role", requireAdmin, async (c) => {
+	const body = await c.req.json<{ role?: string }>();
+	if (body.role !== "admin" && body.role !== "member") return c.json({ error: "Role must be admin or member" }, 400);
+	if (c.req.param("id") === c.get("user").id) return c.json({ error: "Another admin has to change your role" }, 400);
+	try {
+		return c.json(await setRole(c.req.param("id"), body.role));
+	} catch (error) {
+		if (error instanceof RoleError) return c.json({ error: error.message }, 400);
+		throw error;
+	}
 });
 
 api.delete("/users/:id", requireAdmin, async (c) => {

@@ -29,7 +29,8 @@ import {
 	verifyForwardAuth,
 } from "./auth.ts";
 import { appHost, config, previewHost } from "./config.ts";
-import { startIdleSweeper, touch, waitForDevServer, wake, watch } from "./idle.ts";
+import { startIdleSweeper, touch, wake, watch } from "./idle.ts";
+import { STARTING_HEADER, startingPage } from "./starting.ts";
 import { canSendMail, MailError, mailView, removeSmtp, saveSmtp, sendMail } from "./mail.ts";
 import {
 	CONNECTION_KINDS,
@@ -144,34 +145,29 @@ app.onError((error, c) => {
 
 app.get("/healthz", (c) => c.text("ok"));
 
-/** A page that says the app is starting, streamed while `start` runs, then reloads into the app. */
-function startingPage(name: string, why: string, start: () => Promise<boolean>): Response {
-	const safe = name.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
-	const encoder = new TextEncoder();
-	const body = new ReadableStream<Uint8Array>({
-		async start(controller) {
-			controller.enqueue(
-				encoder.encode(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Starting ${safe}</title>
-<body style="font:15px system-ui;margin:20vh auto;max-width:28rem;padding:0 16px;text-align:center;color:#555">
-<p>Starting ${safe}…</p><p style="font-size:13px">${why}</p>
-`),
-			);
-			let ready = false;
-			try {
-				ready = await start();
-			} catch (error) {
-				console.error(`[wake] ${name}: could not start: ${errorMessage(error)}`);
-			}
-			controller.enqueue(encoder.encode(ready ? "<script>location.reload()</script>" : "<p>It is taking longer than usual. <a href=\"\">Try again</a></p>"));
-			controller.close();
-		},
-	});
-	return new Response(body, { status: 503, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+/** Starts an app at most once at a time: visitors and the waiting page's polling share one start. */
+const starting = new Map<string, Promise<unknown>>();
+function startOnce(key: string, name: string, start: () => Promise<unknown>): void {
+	if (starting.has(key)) return;
+	const run = start()
+		.catch((error) => console.error(`[wake] ${name}: could not start: ${errorMessage(error)}`))
+		.finally(() => starting.delete(key));
+	starting.set(key, run);
 }
 
-// A sleeping preview, or a published app taken down for lack of visits, has no route of its own, so
-// Traefik's fallback router (platform-wake in docker-compose.yml) sends the request here. This starts it,
-// shows a short "starting" page, and reloads into the app once it answers.
+/** The waiting page with Axel, which reloads into the app once it answers. */
+function waitingPage(c: Context<AppEnv>, name: string, why: string): Response {
+	c.header(STARTING_HEADER, "1");
+	c.header("Cache-Control", "no-store");
+	return c.html(startingPage(name, why), 503);
+}
+
+// While an app starts, people see a waiting page instead of a gateway error. Two ways lead here:
+// a sleeping preview, or a published app taken down for lack of visits, has no route of its own, so
+// Traefik's fallback router (platform-wake in docker-compose.yml) sends the request here; and an app
+// whose container runs but doesn't answer yet (502-504) is sent here by the agency-starting
+// middleware on its route. This starts the app if needed and serves the page, which polls until the
+// app answers.
 app.use("*", async (c, next) => {
 	const host = (c.req.header("Host") ?? "").split(":")[0].toLowerCase();
 	const slug = slugFromHost(host, config.baseDomain);
@@ -181,23 +177,14 @@ app.use("*", async (c, next) => {
 	if (!user) return c.redirect(`${config.publicUrl}/?next=${encodeURIComponent(`${config.scheme}://${host}${c.req.path}`)}`, 302);
 	if (!project || !(await projectRole(user, project))) return c.text("App not found", 404);
 	if (host === previewHost(slug)) {
-		return startingPage(project.name, "It was asleep after a while without use. This can take up to a minute.", async () => {
-			await wake(project);
-			return waitForDevServer(project);
-		});
+		startOnce(`preview:${project.id}`, project.name, () => wake(project));
+		return waitingPage(c, project.name, "Axel is getting the preview ready. This can take up to a minute.");
 	}
 	const active = (await listDeployments(project)).find((d) => d.active);
 	if (!active) return c.text("This app isn't published", 404);
-	if (await appRuntime.running(project)) {
-		// Just started: Traefik picks up its route within a few seconds.
-		return c.html(`<!doctype html><meta http-equiv="refresh" content="3"><body style="font:15px system-ui;margin:20vh auto;text-align:center;color:#555">Starting…`, 503);
-	}
+	if (!(await appRuntime.running(project))) startOnce(`app:${project.id}`, project.name, () => wakeApp(project));
 	const why = project.app_asleep_since ? "Nobody had opened it for a while, so it was taken offline. " : "";
-	return startingPage(project.name, `${why}This can take a minute or two.`, async () => {
-		// Starting may outlast the page (a new apps server): the visitor's retry joins the same start.
-		const started = wakeApp(project).then(() => true);
-		return Promise.race([started, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 150_000))]);
-	});
+	return waitingPage(c, project.name, `${why}This can take a minute or two.`);
 });
 app.get("/auth/verify", (c) => verifyForwardAuth(c));
 app.route("/gateway", gateway);

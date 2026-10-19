@@ -481,8 +481,8 @@ function Home() {
 		setBusy(true);
 		setError("");
 		try {
-			const appName = name.trim() || prompt.trim().split(/\s+/).slice(0, 4).join(" ");
-			const project = await api("/projects", { method: "POST", body: { name: appName, prompt } });
+			// Without a typed name, the server names the app and its subdomain from the prompt.
+			const project = await api("/projects", { method: "POST", body: { name: name.trim(), prompt } });
 			location.hash = `#/p/${project.id}`;
 		} catch (err) {
 			setError(err.message);
@@ -667,6 +667,49 @@ function ComposerOptions({ mode, onMode, models, model, onModel }) {
 	</div>`;
 }
 
+/** The app's name in the builder's top bar; owners and editors click it to rename the app. */
+function AppTitle({ project, canEdit, onRenamed }) {
+	const [editing, setEditing] = useState(false);
+	const [value, setValue] = useState("");
+	const done = useRef(false);
+	if (!canEdit) return html`<h2>${project.name}</h2>`;
+	const start = () => {
+		done.current = false;
+		setValue(project.name);
+		setEditing(true);
+	};
+	const save = async () => {
+		if (done.current) return;
+		done.current = true;
+		setEditing(false);
+		const name = value.replace(/\s+/g, " ").trim();
+		if (!name || name === project.name) return;
+		try {
+			onRenamed(await api(`/projects/${project.id}`, { method: "PATCH", body: { name } }));
+		} catch (err) {
+			toast(err.message, "error");
+		}
+	};
+	if (!editing)
+		return html`<h2><button class="title-btn" title="Rename. The address stays ${project.slug}." onClick=${start}>${project.name}</button></h2>`;
+	return html`<input
+		class="input title-input"
+		value=${value}
+		maxlength="60"
+		aria-label="App name"
+		ref=${(el) => el && document.activeElement !== el && !done.current && (el.focus(), el.select())}
+		onInput=${(e) => setValue(e.target.value)}
+		onBlur=${save}
+		onKeyDown=${(e) => {
+			if (e.key === "Enter") save();
+			if (e.key === "Escape") {
+				done.current = true;
+				setEditing(false);
+			}
+		}}
+	/>`;
+}
+
 function Builder({ id }) {
 	const [project, setProject] = useState(null);
 	const [items, setItems] = useState([]);
@@ -823,7 +866,7 @@ function Builder({ id }) {
 		<header class="topbar">
 			<div class="left">
 				<a class="icon-btn" href="#/" title="All apps">${icon("arrowLeft")}</a>
-				<h2>${project.name}</h2>
+				<${AppTitle} project=${project} canEdit=${canEdit} onRenamed=${setProject} />
 				${running
 					? html`<span class="status"><span class="dot pulse"></span>Working</span>`
 					: project.appAsleepSince

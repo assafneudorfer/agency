@@ -128,3 +128,9 @@ export async function resolveModel(requested?: string): Promise<string> {
 	const entry = catalog().find((e) => e.key === key)!;
 	return entry === custom ? entry.key : piModel(entry);
 }
+
+/** The small, fast model the platform uses for its own short tasks, such as naming new apps: a Claude API model ID, or a Bedrock inference profile ID. */
+export function utilityModel(): string {
+	const entry = CATALOG.find((e) => e.key === "claude-haiku-5-5")!;
+	return provider === "bedrock" ? `${bedrockPrefix()}.anthropic.${entry.bedrock}` : entry.key;
+}

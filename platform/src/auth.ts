@@ -47,6 +47,24 @@ export async function createUser(
 	return user!;
 }
 
+export class RoleError extends Error {}
+
+/**
+ * Makes a user an admin or a member. The last admin can't become a member, so someone can always manage the team.
+ * Sessions read the role on every request, so the change takes effect on the user's next click.
+ */
+export async function setRole(userId: string, role: User["role"]): Promise<User> {
+	const user = await queryOne<User>(
+		`update users set role = $2
+		 where id = $1 and ($2 = 'admin' or exists (select 1 from users where role = 'admin' and id <> $1))
+		 returning id, email, name, role`,
+		[userId, role],
+	);
+	if (user) return user;
+	const exists = await queryOne("select 1 from users where id = $1", [userId]);
+	throw new RoleError(exists ? "The organization needs at least one admin" : "No such member");
+}
+
 export class LoginError extends Error {}
 
 export async function login(c: Context, email: string, password: string): Promise<User | undefined> {

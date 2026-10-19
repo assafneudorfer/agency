@@ -2763,6 +2763,8 @@ function BudgetEditor({ member, onSaved, onCancel }) {
 	</form>`;
 }
 
+const ROLE_LABELS = { admin: "Admin", member: "Member" };
+
 const EMPTY_MEMBER = { email: "", name: "", password: "", role: "member", budgetUsd: "", unlimited: false };
 
 function Team({ user, onChange }) {
@@ -2787,6 +2789,25 @@ function Team({ user, onChange }) {
 			setError(err.message);
 		}
 	};
+	const changeRole = async (member, e) => {
+		const role = e.target.value;
+		const question =
+			role === "admin"
+				? `Make ${member.email} an admin? Admins manage the team, connections and settings, and can open every app.`
+				: `Make ${member.email} a member? They keep their apps but lose access to team and organization settings.`;
+		if (!confirm(question)) {
+			e.target.value = member.role;
+			return;
+		}
+		try {
+			await api(`/users/${member.id}/role`, { method: "PATCH", body: { role } });
+			toast(`${member.email} is now ${role === "admin" ? "an admin" : "a member"}`);
+		} catch (err) {
+			e.target.value = member.role;
+			toast(err.message, "error");
+		}
+		load();
+	};
 	if (user.role !== "admin") return html`<div class="page"><div class="empty">${icon("lock")} Only admins manage the team.</div></div>`;
 	const total = users.reduce((sum, u) => sum + u.spentUsd, 0);
 	return html`<div class="page">
@@ -2804,7 +2825,7 @@ function Team({ user, onChange }) {
 					(u) => html`<div class="list-row member-row">
 						<span class="avatar">${(u.name || u.email).slice(0, 1)}</span>
 						<div class="grow">
-							<div class="title">${u.name || u.email} <span class="badge">${u.role}</span></div>
+							<div class="title">${u.name || u.email} ${u.id === user.id && html`<span class="badge">You</span>`}</div>
 							${u.name && html`<div class="sub">${u.email}</div>`}
 						</div>
 						${editing === u.id
@@ -2821,6 +2842,12 @@ function Team({ user, onChange }) {
 										<div class="row"><span class="mono">${spendLabel(u)}</span></div>
 										<${Meter} spent=${u.spentUsd} budget=${u.budgetUsd} unlimited=${u.unlimited} />
 									</div>
+									${u.id === user.id
+										? html`<span class="role-self" title="Another admin can change your role">${ROLE_LABELS[u.role]}</span>`
+										: html`<select class="select sm role-select" aria-label=${`Role of ${u.email}`} value=${u.role} onChange=${(e) => changeRole(u, e)}>
+												<option value="member">Member</option>
+												<option value="admin">Admin</option>
+											</select>`}
 									<button class="btn sm" onClick=${() => setEditing(u.id)}>Budget</button>
 									${u.id !== user.id &&
 									html`<button

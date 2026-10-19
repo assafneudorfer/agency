@@ -62,13 +62,13 @@ export function envArgs(env: Record<string, string>): string[] {
 	return Object.entries(env).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
 }
 
-/** Traefik labels that route a host name to a container port behind the agency-auth middleware. */
+/** Traefik labels that route a host name to a container port behind the agency-auth middleware, with the waiting page while it starts. */
 export function routeLabels(router: string, host: string, port: number): Record<string, string> {
 	return {
 		"traefik.enable": "true",
 		[`traefik.http.routers.${router}.rule`]: `Host(\`${host}\`)`,
 		[`traefik.http.routers.${router}.entrypoints`]: "app",
-		[`traefik.http.routers.${router}.middlewares`]: "agency-auth@docker",
+		[`traefik.http.routers.${router}.middlewares`]: "agency-auth@docker,agency-starting@docker",
 		[`traefik.http.routers.${router}.service`]: router,
 		[`traefik.http.services.${router}.loadbalancer.server.port`]: String(port),
 	};

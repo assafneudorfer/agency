@@ -1,6 +1,6 @@
 import { allBridges, bridgeIfAny, dropBridge } from "./agent.ts";
 import { config } from "./config.ts";
-import { execIn, sandboxes } from "./sandboxes.ts";
+import { sandboxes } from "./sandboxes.ts";
 import { ensureSandbox, getProject, type Project } from "./projects.ts";
 
 /**
@@ -42,13 +42,6 @@ function quietFor(projectId: string): number {
 export async function wake(project: Project): Promise<void> {
 	touch(project.id);
 	await ensureSandbox(project);
-}
-
-/** Waits until the sandbox's dev server answers, so a woken preview doesn't load into an error. */
-export async function waitForDevServer(project: Project, seconds = 60): Promise<boolean> {
-	const script = `for i in $(seq 1 ${seconds}); do curl -s -o /dev/null --max-time 20 http://localhost:3000/ && exit 0; sleep 1; done; exit 1`;
-	const result = await execIn(project, script, (seconds + 30) * 1000);
-	return result.code === 0;
 }
 
 /** One pass: ends idle pi processes, then stops sandboxes that stayed idle longer. */

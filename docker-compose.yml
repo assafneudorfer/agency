@@ -41,6 +41,11 @@ services:
       traefik.http.middlewares.agency-auth.forwardauth.trustForwardHeader: "true"
       # Who is signed in, for the app: these replace any same-named headers the browser sent.
       traefik.http.middlewares.agency-auth.forwardauth.authResponseHeaders: X-Agency-User,X-Agency-User-Id,X-Agency-User-Name,X-Agency-User-Role,X-Agency-App-Role
+      # While an app's container runs but doesn't answer yet, show the platform's waiting page (Axel)
+      # instead of "Bad Gateway". The page polls and reloads into the app once it answers.
+      traefik.http.middlewares.agency-starting.errors.status: "502-504"
+      traefik.http.middlewares.agency-starting.errors.service: platform@docker
+      traefik.http.middlewares.agency-starting.errors.query: /__agency/starting
     networks: [agency]
     restart: unless-stopped
 

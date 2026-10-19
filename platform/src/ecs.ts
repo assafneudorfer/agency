@@ -133,7 +133,7 @@ export async function writeRoutes(file: string, routes: Route[]): Promise<void> 
 				`    ${route.name}:`,
 				`      rule: "Host(\`${route.host}\`)"`,
 				"      entryPoints: [app]",
-				"      middlewares: [agency-auth@docker]",
+				"      middlewares: [agency-auth@docker, agency-starting@docker]",
 				`      service: ${route.name}`,
 			);
 		}

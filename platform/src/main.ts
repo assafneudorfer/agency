@@ -58,6 +58,7 @@ import {
 	getProjectBySlug,
 	listProjects,
 	type Project,
+	renameProject,
 	sandboxOutdated,
 } from "./projects.ts";
 import {
@@ -80,6 +81,7 @@ import {
 	unlinkRepository,
 } from "./github.ts";
 import { allowedModels, ModelError, modelSettings, saveModelSettings } from "./models.ts";
+import { nameApp } from "./naming.ts";
 import { listDeployments, publish, rollback, unpublish } from "./publish.ts";
 import {
 	createSkill,
@@ -95,7 +97,7 @@ import {
 	updateSkill,
 } from "./skills.ts";
 import { saveSso, signInOptions, SsoError, ssoFinish, ssoStartUrl, ssoView } from "./sso.ts";
-import { assertBudget, BudgetError, listUsersWithUsage, parseBudget, setBudget, usageDetail, usageFor } from "./usage.ts";
+import { assertBudget, BudgetError, listUsersWithUsage, parseBudget, recordUsage, setBudget, usageDetail, usageFor } from "./usage.ts";
 
 class NotFoundError extends Error {}
 
@@ -327,16 +329,20 @@ api.get("/projects", async (c) => {
 });
 
 api.post("/projects", async (c) => {
-	const body = await c.req.json<{ name: string; prompt?: string }>();
-	const name = (body.name ?? "").trim();
-	if (!name) return c.json({ error: "Name is required" }, 400);
+	const body = await c.req.json<{ name?: string; prompt?: string }>();
+	const given = (body.name ?? "").trim().slice(0, 60);
+	const prompt = body.prompt?.trim() ?? "";
+	if (!given && !prompt) return c.json({ error: "Describe the app or give it a name" }, 400);
 	const user = c.get("user");
-	if (body.prompt?.trim()) await assertBudget(user.id);
-	const project = await createProject(name, user.id);
+	if (prompt) await assertBudget(user.id);
+	// Name and subdomain come from the request, unless the creator typed a name.
+	const named = await nameApp(prompt, given);
+	const project = await createProject(named.name, user.id, named.slug);
+	if (named.usage) await recordUsage(user.id, project.id, named.usage).catch(() => {});
 	linkNewApp(project.id);
-	if (body.prompt?.trim()) {
+	if (prompt) {
 		bridgeFor(project)
-			.prompt(body.prompt.trim(), user.id)
+			.prompt(prompt, user.id)
 			.catch((error) => console.error(`[agent ${project.slug}] first prompt failed: ${errorMessage(error)}`));
 	}
 	return c.json(await projectView(project, "owner"), 201);
@@ -344,6 +350,16 @@ api.post("/projects", async (c) => {
 
 api.get("/projects/:id", async (c) => {
 	const { project, role } = await projectFor(c, "viewer");
+	return c.json(await projectView(project, role));
+});
+
+api.patch("/projects/:id", async (c) => {
+	const { project, role } = await projectFor(c, "editor");
+	const body = await c.req.json<{ name?: string }>();
+	const name = (body.name ?? "").replace(/\s+/g, " ").trim();
+	if (!name) return c.json({ error: "Name is required" }, 400);
+	if (name.length > 60) return c.json({ error: "Keep the name under 60 characters" }, 400);
+	await renameProject(project, name);
 	return c.json(await projectView(project, role));
 });
 

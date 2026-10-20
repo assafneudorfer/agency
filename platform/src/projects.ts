@@ -51,8 +51,8 @@ export function slugify(name: string): string {
 		.replace(/-+$/g, "");
 }
 
-async function uniqueSlug(name: string): Promise<string> {
-	let base = slugify(name) || "app";
+async function uniqueSlug(wanted: string): Promise<string> {
+	let base = slugify(wanted) || "app";
 	if (RESERVED.has(base) || base.endsWith("-preview")) base = `${base}-app`;
 	for (let i = 0; ; i++) {
 		const slug = i === 0 ? base : `${base}-${i + 1}`;
@@ -171,8 +171,9 @@ export function sandboxEnv(project: Project): Record<string, string> {
 	return { ...appEnv(project), AGENCY_DEV_ORIGINS: `*.${config.baseDomain}` };
 }
 
-export async function createProject(name: string, ownerId: string): Promise<Project> {
-	const slug = await uniqueSlug(name);
+/** Creates an app named `name` at the subdomain `wanted`, or `wanted`-2, -3, ... when that is taken. */
+export async function createProject(name: string, ownerId: string, wanted = name): Promise<Project> {
+	const slug = await uniqueSlug(wanted);
 	const dbName = `app_${slug.replace(/-/g, "_")}`;
 	// Each app gets its own Postgres role and database for the preview; the live one comes with the first publish.
 	const passwordEnc = await createDatabase(dbName);
@@ -182,6 +183,12 @@ export async function createProject(name: string, ownerId: string): Promise<Proj
 	);
 	await ensureSandbox(project!);
 	return project!;
+}
+
+/** Changes the name shown in Agency. The subdomain, database and GitHub repository keep theirs. */
+export async function renameProject(project: Project, name: string): Promise<void> {
+	await query("update projects set name = $2 where id = $1", [project.id, name]);
+	project.name = name;
 }
 
 export async function getProject(id: string): Promise<Project | undefined> {

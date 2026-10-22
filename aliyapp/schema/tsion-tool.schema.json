@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aliyapp.org/schema/tsion-tool.schema.json",
+  "title": "Tsion tool card",
+  "description": "Minimum card for an Aliyapp builder tool. No card, no queue for Tsion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "audience",
+    "journeyStage",
+    "abcde",
+    "languages",
+    "organization",
+    "maintainerAfterDemoDay",
+    "tsionMcpAction"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 280,
+      "description": "What the tool does, in one sentence."
+    },
+    "audience": {
+      "type": "string",
+      "enum": ["oleh", "volunteer", "partner", "staff"],
+      "description": "Primary audience."
+    },
+    "journeyStage": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stage in the aliyah journey (short slug or phrase)."
+    },
+    "abcde": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["A", "B", "C", "D", "E"]
+      },
+      "description": "Internal ABCDE domains. User-facing labels are separate."
+    },
+    "languages": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["he", "en", "fr", "ru", "es", "pt", "uk"]
+      },
+      "description": "Product languages available in this tool."
+    },
+    "organization": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Organization behind the challenge or tool."
+    },
+    "maintainerAfterDemoDay": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Who maintains the tool after Demo Day."
+    },
+    "tsionMcpAction": {
+      "description": "False if Tsion cannot call an MCP action; otherwise a short action id or description.",
+      "oneOf": [
+        { "type": "boolean", "const": false },
+        { "type": "string", "minLength": 1 }
+      ]
+    },
+    "dataMode": {
+      "type": "string",
+      "enum": ["mock", "counts-only", "live-read"],
+      "description": "Pilot default is mock or counts-only. No oleh PII."
+    },
+    "stage": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Builders program stage. 0 = internal proof, not deployed."
+    }
+  }
+}

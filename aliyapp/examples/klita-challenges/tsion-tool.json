@@ -1,0 +1,69 @@
+{
+  "summary": "לוח אתגרי קליטה פתוחים לפי שלב במסע ולפי ABCDE, עם ספירת פניות ממתינות וקישור למדריך — בלי שמות עולים.",
+  "audience": "partner",
+  "journeyStage": "first-year",
+  "abcde": ["A", "B", "C", "D", "E"],
+  "languages": ["he", "en"],
+  "organization": "ארגון קליטה לדוגמה (mock)",
+  "maintainerAfterDemoDay": "צוות הפיילוט הפנימי — אשל + אסף",
+  "tsionMcpAction": false,
+  "dataMode": "mock",
+  "stage": 0,
+  "board": {
+    "title": {
+      "he": "אתגרי קליטה פתוחים",
+      "en": "Open klita challenges"
+    },
+    "note": {
+      "he": "נתונים מדומים לשלב 0. אין שמות, מיילים, טלפונים או מזהי תיק של עולים.",
+      "en": "Mock data for stage 0. No oleh names, emails, phones, or file ids."
+    },
+    "challenges": [
+      {
+        "id": "mock-a-jobs",
+        "abcde": "A",
+        "label": { "he": "עבודה", "en": "Work" },
+        "journeyStage": { "he": "שנה ראשונה", "en": "First year" },
+        "organization": { "he": "ארגון קליטה לדוגמה", "en": "Sample klita org" },
+        "waitingCount": 12,
+        "guideUrl": "https://example.invalid/guides/jobs-first-year"
+      },
+      {
+        "id": "mock-b-housing",
+        "abcde": "B",
+        "label": { "he": "בית וחיי יום־יום", "en": "Home & daily life" },
+        "journeyStage": { "he": "לפני עלייה", "en": "Pre-aliyah" },
+        "organization": { "he": "ארגון קליטה לדוגמה", "en": "Sample klita org" },
+        "waitingCount": 7,
+        "guideUrl": "https://example.invalid/guides/housing-pre"
+      },
+      {
+        "id": "mock-c-community",
+        "abcde": "C",
+        "label": { "he": "קהילה", "en": "Community" },
+        "journeyStage": { "he": "שנה ראשונה", "en": "First year" },
+        "organization": { "he": "ארגון קליטה לדוגמה", "en": "Sample klita org" },
+        "waitingCount": 5,
+        "guideUrl": "https://example.invalid/guides/community"
+      },
+      {
+        "id": "mock-d-licensing",
+        "abcde": "D",
+        "label": { "he": "מקצוע ומסמכים", "en": "Profession & documents" },
+        "journeyStage": { "he": "לפני עלייה", "en": "Pre-aliyah" },
+        "organization": { "he": "ארגון קליטה לדוגמה", "en": "Sample klita org" },
+        "waitingCount": 9,
+        "guideUrl": "https://example.invalid/guides/licensing"
+      },
+      {
+        "id": "mock-e-hebrew",
+        "abcde": "E",
+        "label": { "he": "עברית ולמידה", "en": "Hebrew & learning" },
+        "journeyStage": { "he": "שנה ראשונה", "en": "First year" },
+        "organization": { "he": "ארגון קליטה לדוגמה", "en": "Sample klita org" },
+        "waitingCount": 15,
+        "guideUrl": "https://example.invalid/guides/ulpan"
+      }
+    ]
+  }
+}

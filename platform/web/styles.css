@@ -1527,6 +1527,7 @@ code {
 }
 
 .viewport {
+	position: relative;
 	flex: 1;
 	min-height: 0;
 	display: flex;
@@ -1553,6 +1554,214 @@ code {
 	max-width: 100%;
 	border-radius: 20px;
 	box-shadow: var(--shadow-lg);
+}
+
+/* "Change this": pick part of the preview, then say what to change there. */
+
+.pick-btn.on,
+.pick-btn[aria-pressed="true"] {
+	background: var(--accent-soft);
+	color: var(--accent);
+}
+
+.pick-hint {
+	position: absolute;
+	top: 12px;
+	left: 50%;
+	z-index: 5;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: calc(100% - 24px);
+	height: 34px;
+	padding: 0 4px 0 12px;
+	border-radius: 999px;
+	background: var(--text);
+	color: var(--bg);
+	font-size: 12.5px;
+	font-weight: 500;
+	box-shadow: var(--shadow-lg);
+	transform: translateX(-50%);
+	animation: pick-in 200ms var(--ease-out);
+}
+
+.pick-hint svg.icon {
+	flex: none;
+	width: 15px;
+	height: 15px;
+}
+
+.pick-hint > span:not(.spinner) {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pick-hint .spinner {
+	width: 13px;
+	height: 13px;
+	border-color: currentColor;
+	border-right-color: transparent;
+}
+
+.pick-hint-close {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 26px;
+	height: 26px;
+	border: none;
+	border-radius: 50%;
+	background: transparent;
+	color: inherit;
+	opacity: 0.7;
+	cursor: pointer;
+}
+
+.pick-hint-close svg.icon {
+	width: 14px;
+	height: 14px;
+}
+
+@keyframes pick-in {
+	from {
+		opacity: 0;
+		transform: translateX(-50%) translateY(-6px);
+	}
+}
+
+.pick-prompt {
+	position: absolute;
+	top: 0;
+	left: 0;
+	z-index: 6;
+	display: flex;
+	flex-direction: column;
+	width: min(340px, calc(100% - 20px));
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-lg);
+	background: var(--surface);
+	box-shadow: var(--shadow-lg);
+	animation: pick-prompt-in 220ms var(--ease-out);
+}
+
+.pick-prompt:focus-within {
+	border-color: var(--accent);
+}
+
+.pick-prompt.docked {
+	top: auto;
+	right: 10px;
+	bottom: 10px;
+	left: 10px;
+	width: auto;
+	transform: none !important;
+}
+
+@keyframes pick-prompt-in {
+	from {
+		opacity: 0;
+		scale: 0.97;
+	}
+}
+
+.pick-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 6px 0 8px;
+	min-width: 0;
+}
+
+.pick-thumb {
+	flex: none;
+	width: 36px;
+	height: 28px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--surface-2);
+}
+
+.pick-thumb.empty {
+	display: grid;
+	place-items: center;
+	color: var(--accent);
+}
+
+.pick-thumb.empty svg.icon {
+	width: 15px;
+	height: 15px;
+}
+
+.pick-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--text-2);
+	font-family: var(--mono);
+	font-size: 11.5px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pick-prompt .icon-btn.sm {
+	width: 26px;
+	height: 26px;
+}
+
+.pick-prompt textarea {
+	display: block;
+	width: 100%;
+	min-height: 52px;
+	max-height: 160px;
+	padding: 8px 12px 2px;
+	border: none;
+	background: transparent;
+	resize: none;
+}
+
+.pick-prompt textarea:focus {
+	outline: none;
+}
+
+.pick-bar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 6px 6px 12px;
+	font-size: 11.5px;
+}
+
+/* A screenshot of what was picked: shown whole, not cropped like a photo. */
+.msg-user-wrap.picked .attach-thumb img,
+.pick-thumb {
+	object-fit: contain;
+}
+
+.pick-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	height: 26px;
+	padding: 0 10px;
+	border-radius: 999px;
+	background: var(--accent-soft);
+	color: var(--accent);
+	font-family: var(--mono);
+	font-size: 11.5px;
+}
+
+.pick-chip svg.icon {
+	flex: none;
+	width: 13px;
+	height: 13px;
+}
+
+.pick-chip span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 /* Sheets slide in from the right over the stage; leaving is quicker than arriving. */

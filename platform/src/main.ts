@@ -83,6 +83,7 @@ import {
 import { allowedModels, ModelError, modelSettings, saveModelSettings } from "./models.ts";
 import { nameApp } from "./naming.ts";
 import { listDeployments, publish, rollback, unpublish } from "./publish.ts";
+import { promptWithSelection, selectionContext } from "./selection.ts";
 import {
 	createSkill,
 	deleteSkill,
@@ -404,8 +405,9 @@ api.get("/projects/:id/messages", async (c) => {
 });
 
 /**
- * JSON `{ message, mode?, model? }`, or multipart with those fields and `files` (chat attachments).
- * `mode` is auto (build), plan or chat; `model` is a catalog key, used if an admin allowed it.
+ * JSON `{ message, mode?, model?, selection? }`, or multipart with those fields and `files` (chat attachments).
+ * `mode` is auto (build), plan or chat; `model` is a catalog key, used if an admin allowed it; `selection`
+ * is the part of the preview the person pointed at (selection.ts).
  */
 api.post("/projects/:id/prompt", async (c) => {
 	const { project } = await sandboxFor(c, "editor");
@@ -426,7 +428,8 @@ api.post("/projects/:id/prompt", async (c) => {
 	checkAttachments(files);
 	await assertBudget(c.get("user").id);
 	const paths = await saveAttachments(project, files);
-	const result = await bridgeFor(project).prompt(promptWithAttachments(message, paths), c.get("user").id, modelImages(files), { mode, model });
+	const text = promptWithAttachments(promptWithSelection(message, selectionContext(fields.selection)), paths);
+	const result = await bridgeFor(project).prompt(text, c.get("user").id, modelImages(files), { mode, model });
 	return c.json({ ...(result as object), attachments: paths });
 });
 

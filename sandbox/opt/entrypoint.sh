@@ -16,7 +16,7 @@ if [ ! -f "$WS/package.json" ]; then
 fi
 cd "$WS"
 # Helpers the platform provides: add any that a workspace made from an older template is missing.
-for helper in lib/agency.ts lib/db.ts lib/user.ts; do
+for helper in lib/agency.ts lib/db.ts lib/user.ts instrumentation-client.ts; do
 	[ -f "$WS/$helper" ] || { mkdir -p "$(dirname "$WS/$helper")"; cp "/opt/template/$helper" "$WS/$helper"; }
 done
 # On Fargate, node_modules is an empty directory on the task's own disk at every start: fill it from

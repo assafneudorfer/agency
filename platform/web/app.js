@@ -1,6 +1,6 @@
 import htm from "htm";
 import { h, render } from "preact";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 
 const html = htm.bind(h);
 
@@ -68,6 +68,8 @@ function textOf(content) {
 
 // The platform appends where each attachment was saved; the chat shows them as chips instead.
 const ATTACHMENTS_HEADING = "\n\nAttached files (saved in the workspace):\n";
+// ...and, before that, what the person picked in the preview (selection.ts), shown as one chip.
+const SELECTION_HEADING = "\n\nSelected in the preview at ";
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
 
 function userItem(content) {
@@ -86,8 +88,16 @@ function userItem(content) {
 		.map((block) => `data:${block.mimeType};base64,${block.data}`);
 	// Images the model saw are drawn as thumbnails; every other file is a chip.
 	const files = images.length ? paths.filter((path) => !IMAGE_EXT.test(path)) : paths;
-	const text = at === -1 ? raw : raw.slice(0, at);
-	return { kind: "user", text: paths.length && text === "See the attached files." ? "" : text, images, files };
+	let text = at === -1 ? raw : raw.slice(0, at);
+	const picked = text.indexOf(SELECTION_HEADING);
+	let selection = null;
+	if (picked !== -1) {
+		const line = text.slice(picked + SELECTION_HEADING.length).split("\n")[0];
+		const split = line.indexOf(": ");
+		selection = { page: line.slice(0, split), label: line.slice(split + 2) };
+		text = text.slice(0, picked);
+	}
+	return { kind: "user", text: paths.length && text === "See the attached files." ? "" : text, images, files, selection };
 }
 
 function toolLabel(name, args = {}) {
@@ -228,6 +238,8 @@ const ICONS = {
 	upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
 	cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/>',
 	chevronDown: '<path d="m6 9 6 6 6-6"/>',
+	select:
+		'<path d="M12.03 12.68a.5.5 0 0 1 .65-.65l9 3.5a.5.5 0 0 1-.03.94l-3.45 1.07a1 1 0 0 0-.66.66l-1.07 3.44a.5.5 0 0 1-.94.03z"/><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M14 3h1"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/>',
 	infinity: '<path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4z"/>',
 };
 
@@ -565,7 +577,9 @@ function toolIcon(label) {
 function ChatItem({ item }) {
 	if (item.kind === "user") {
 		const attached = item.images.length > 0 || item.files.length > 0;
-		return html`<div class="msg msg-user-wrap">
+		return html`<div class=${`msg msg-user-wrap${item.selection ? " picked" : ""}`}>
+			${item.selection &&
+			html`<span class="pick-chip" title=${`Selected on ${item.selection.page}`}>${icon("select")}<span>${item.selection.label}</span></span>`}
 			${attached &&
 			html`<div class="msg-attachments">
 				${item.images.map((src) => html`<a class="attach-thumb" href=${src} target="_blank" rel="noopener"><img src=${src} alt="" /></a>`)}
@@ -587,6 +601,83 @@ function ChatItem({ item }) {
 			)}
 		</div>`}
 		${item.error && html`<div class="msg-error">${item.error}</div>`}
+	</div>`;
+}
+
+// The box that opens over the preview after picking something in it: what to change there.
+function PickPrompt({ pick, frame, container, docked, running, onSend, onCancel }) {
+	const [text, setText] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [thumb, setThumb] = useState(null);
+	const box = useRef(null);
+	const field = useRef(null);
+
+	useEffect(() => {
+		field.current?.focus({ preventScroll: true });
+	}, []);
+	useEffect(() => {
+		if (!pick.image) return;
+		const url = URL.createObjectURL(pick.image);
+		setThumb(url);
+		return () => URL.revokeObjectURL(url);
+	}, [pick.image]);
+	// Below what was picked, or above it when there is no room; docked to the bottom on narrow previews.
+	useLayoutEffect(() => {
+		const el = box.current;
+		const iframe = frame.current;
+		const area = container.current;
+		if (!el || !iframe || !area || docked) return;
+		const gap = 10;
+		const width = el.offsetWidth;
+		const height = el.offsetHeight;
+		const left = iframe.offsetLeft + pick.rect.left;
+		const top = iframe.offsetTop + pick.rect.top;
+		const bottom = top + pick.rect.height;
+		let y = bottom + gap;
+		if (y + height > area.clientHeight - gap) y = top - gap - height;
+		if (y < gap) y = Math.min(Math.max(gap, bottom - height - gap), area.clientHeight - height - gap);
+		const x = Math.min(Math.max(gap, left), area.clientWidth - width - gap);
+		el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+	}, [pick.rect, docked]);
+
+	const submit = async () => {
+		const message = text.trim();
+		if (!message || busy) return;
+		setBusy(true);
+		const ok = await onSend(message);
+		if (!ok) setBusy(false);
+	};
+	return html`<div class=${`pick-prompt${docked ? " docked" : ""}`} ref=${box} role="dialog" aria-label="Change the selected part">
+		<div class="pick-head">
+			${thumb ? html`<img class="pick-thumb" src=${thumb} alt="" />` : html`<span class="pick-thumb empty">${icon("select")}</span>`}
+			<span class="pick-label" title=${pick.selection.target?.selector}>${pick.selection.label}</span>
+			<button class="icon-btn sm" title="Cancel" onClick=${onCancel}>${icon("x")}</button>
+		</div>
+		<textarea
+			ref=${field}
+			rows="2"
+			placeholder=${running ? "What should change here? It runs after the current step." : "What should change here?"}
+			enterkeyhint="send"
+			value=${text}
+			onInput=${(e) => setText(e.target.value)}
+			onKeyDown=${(e) => {
+				if (e.key === "Escape") {
+					e.preventDefault();
+					onCancel();
+				}
+				if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+					e.preventDefault();
+					submit();
+				}
+			}}
+		></textarea>
+		<div class="pick-bar">
+			<span class="faint hide-phone">The agent gets this part's code and a screenshot</span>
+			<span class="grow"></span>
+			<button class="btn primary send" title="Send" disabled=${!text.trim() || busy} onClick=${submit}>
+				${busy ? html`<span class="spinner"></span>` : icon("arrowUp")}
+			</button>
+		</div>
 	</div>`;
 }
 
@@ -731,6 +822,16 @@ function Builder({ id }) {
 	const [previewKey, setPreviewKey] = useState(0);
 	const [restored, setRestored] = useState(0);
 	const scroller = useRef(null);
+	// "Change this": picking an element or area in the preview (preview-select.js inside the iframe).
+	const frame = useRef(null);
+	const stageView = useRef(null);
+	const [picking, setPicking] = useState(false);
+	const [pick, setPick] = useState(null);
+	const [selectable, setSelectable] = useState(false);
+	const pickRef = useRef(null);
+	pickRef.current = pick;
+	const pickingRef = useRef(false);
+	pickingRef.current = picking;
 
 	const loadProject = () => api(`/projects/${id}`).then(setProject, (err) => setError(err.message));
 	const togglePanel = (name) => setPanel((current) => (current === name ? null : name));
@@ -784,6 +885,69 @@ function Builder({ id }) {
 		if (tab === "preview") setFresh(false);
 	}, [tab]);
 
+	const previewOrigin = project && new URL(project.previewUrl).origin;
+	const toPreview = (message) => frame.current?.contentWindow?.postMessage({ source: "agency-builder", ...message }, previewOrigin);
+	useEffect(() => {
+		if (!previewOrigin) return;
+		const onMessage = (e) => {
+			if (e.origin !== previewOrigin || e.source !== frame.current?.contentWindow || e.data?.source !== "agency-preview") return;
+			const data = e.data;
+			if (data.type === "ready") {
+				setSelectable(true);
+				if (pickingRef.current) toPreview({ type: "select", on: true });
+			}
+			if (data.type === "picked") {
+				setPicking(false);
+				setPick({ id: data.id, selection: data.selection, rect: data.rect, image: null, imageDone: false });
+			}
+			if (data.type === "snapshot") setPick((p) => (p?.id === data.id ? { ...p, image: data.image instanceof Blob ? data.image : null, imageDone: true } : p));
+			if (data.type === "moved") setPick((p) => p && { ...p, rect: data.rect });
+			if (data.type === "cancel") {
+				setPicking(false);
+				setPick(null);
+			}
+		};
+		addEventListener("message", onMessage);
+		return () => removeEventListener("message", onMessage);
+	}, [previewOrigin]);
+	useEffect(() => {
+		toPreview({ type: "select", on: picking });
+		if (!picking) return;
+		const onKey = (e) => e.key === "Escape" && setPicking(false);
+		addEventListener("keydown", onKey);
+		return () => removeEventListener("keydown", onKey);
+	}, [picking]);
+	// A reloaded preview loses what was picked; it says "ready" again once it can be picked from.
+	useEffect(() => {
+		setSelectable(false);
+		setPick(null);
+	}, [previewKey]);
+
+	const togglePicking = () => {
+		if (pick) {
+			setPick(null);
+			toPreview({ type: "clear" });
+		}
+		setPicking((on) => !on);
+	};
+	const cancelPick = () => {
+		setPick(null);
+		toPreview({ type: "clear" });
+	};
+	const sendPick = async (message) => {
+		// The screenshot is drawn after the pick; wait for it briefly so the agent sees what was meant.
+		for (let i = 0; i < 50 && pickRef.current && !pickRef.current.imageDone; i++) await new Promise((r) => setTimeout(r, 100));
+		const current = pickRef.current;
+		if (!current) return false;
+		const files = current.image ? [{ file: new File([current.image], "selection.png", { type: "image/png" }) }] : [];
+		const ok = await send({ message, files, selection: current.selection });
+		if (ok) {
+			cancelPick();
+			if (phone) setTab("chat");
+		}
+		return ok;
+	};
+
 	const addFiles = (list) => {
 		const files = [...(list ?? [])];
 		if (files.length === 0) return;
@@ -809,21 +973,23 @@ function Builder({ id }) {
 
 	const send = async (override) => {
 		const message = override?.message ?? input.trim();
-		const files = override ? [] : attachments;
+		const files = override ? (override.files ?? []) : attachments;
+		const selection = override?.selection;
 		const sendMode = override?.mode ?? mode;
-		if ((!message && files.length === 0) || sending) return;
+		if ((!message && files.length === 0) || sending) return false;
 		if (!override) {
 			setInput("");
 			setAttachments([]);
 		}
 		setError("");
 		try {
-			if (files.length) {
+			if (files.length || selection) {
 				setSending(true);
 				const form = new FormData();
 				form.append("message", message);
 				form.append("mode", sendMode);
 				if (model) form.append("model", model);
+				if (selection) form.append("selection", JSON.stringify(selection));
 				for (const a of files) form.append("files", a.file, a.file.name || "pasted file");
 				const response = await fetch(`/api/projects/${id}/prompt`, { method: "POST", body: form });
 				const data = await response.json().catch(() => ({}));
@@ -832,12 +998,15 @@ function Builder({ id }) {
 			} else {
 				await api(`/projects/${id}/prompt`, { method: "POST", body: { message, mode: sendMode, model } });
 			}
+			return true;
 		} catch (err) {
-			setError(err.message);
+			if (selection) toast(err.message, "error");
+			else setError(err.message);
 			if (!override) {
 				setInput(message);
 				setAttachments(files);
 			}
+			return false;
 		} finally {
 			setSending(false);
 		}
@@ -999,6 +1168,15 @@ function Builder({ id }) {
 					<div class="chrome">
 						<button class="icon-btn" title="Reload preview" onClick=${() => setPreviewKey((k) => k + 1)}>${icon("refresh")}</button>
 						<div class="url">${project.previewUrl.startsWith("https") && icon("lock")}<span>${host}</span></div>
+						${canEdit &&
+						html`<button
+							class=${`icon-btn pick-btn${picking || pick ? " on" : ""}`}
+							title="Select something to change"
+							aria-pressed=${picking || Boolean(pick)}
+							onClick=${togglePicking}
+						>
+							${icon("select")}
+						</button>`}
 						<button class="icon-btn hide-phone" title="Desktop width" aria-pressed=${device === "desktop"} onClick=${() => setDevice("desktop")}>
 							${icon("monitor")}
 						</button>
@@ -1007,8 +1185,26 @@ function Builder({ id }) {
 						</button>
 						<a class="icon-btn" href=${project.previewUrl} target="_blank" rel="noopener" title="Open in a new tab">${icon("external")}</a>
 					</div>
-					<div class=${`viewport ${phone ? "desktop" : device}`}>
-						<iframe key=${previewKey} src=${project.previewUrl} title="App preview"></iframe>
+					<div class=${`viewport ${phone ? "desktop" : device}`} ref=${stageView}>
+						<iframe key=${previewKey} ref=${frame} src=${project.previewUrl} title="App preview"></iframe>
+						${picking &&
+						html`<div class="pick-hint" role="status">
+							${selectable
+								? html`${icon("select")}<span>${phone ? "Tap" : "Click"} what to change${phone ? "" : ", or drag over an area"}</span>`
+								: html`<span class="spinner"></span><span>Waiting for the preview</span>`}
+							<button class="pick-hint-close" title="Stop selecting" onClick=${() => setPicking(false)}>${icon("x")}</button>
+						</div>`}
+						${pick &&
+						html`<${PickPrompt}
+							key=${pick.id}
+							pick=${pick}
+							frame=${frame}
+							container=${stageView}
+							docked=${phone || device === "mobile"}
+							running=${running}
+							onSend=${sendPick}
+							onCancel=${cancelPick}
+						/>`}
 					</div>
 				</div>
 				<${CodeView}

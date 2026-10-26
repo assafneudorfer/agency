@@ -42,7 +42,7 @@ Everything runs on one machine you control: a single AWS instance with Docker, s
 
 - **Turn a request into a working internal tool.** "A form where the team logs expenses, with a monthly summary chart" becomes a real app with its own database, not a mockup.
 - **Build on live company data without handing out keys.** An admin connects the CRM or the shared drive once; the agent reads schemas and samples while it builds, and published apps query through the gateway with their own token.
-- **Keep iterating like a conversation.** Ask for a filter, a new column, an export button. Every agent turn is a version you can restore, and you can attach screenshots, mockups or CSV files to a message.
+- **Keep iterating like a conversation.** Ask for a filter, a new column, an export button. Every agent turn is a version you can restore, and you can attach screenshots, mockups or CSV files to a message. To change one part of the app, select it in the preview and type the change: the agent gets that part's code and a screenshot of it.
 - **Open the hood when you want to.** Edit the code in the browser, browse and edit the app's tables, run SQL, or push the whole history to your GitHub organization.
 - **Share it with exactly the right people.** Apps sit behind the team's sign-in (SSO if you want it), and each app's owner decides who can view and who can edit.
 - **Plan first, or just talk it through.** Pick Auto to build right away, Plan to get a plan you approve before any code changes, or Chat to discuss without touching files, and choose which Claude model answers.
@@ -118,7 +118,7 @@ Everything runs on one machine you control: a single AWS instance with Docker, s
 | Build | Data | Ship | Team and admin |
 |---|---|---|---|
 | Chat with the pi coding agent, live preview beside it | Postgres, Supabase and AWS RDS connections | One-click publish to `<app>.<your-domain>` | Email and password, or SSO over OpenID Connect (Google Workspace, Entra ID, Okta) |
-| Attach images and files to a message | Google Drive and Sheets, Salesforce (built in, OAuth) | Versioned images with rollback | Per-app sharing: owner, editors, viewers |
+| Attach images and files to a message; point at part of the preview (click or drag) and say what to change there | Google Drive and Sheets, Salesforce (built in, OAuth) | Versioned images with rollback | Per-app sharing: owner, editors, viewers |
 | Every turn is a restorable version | monday.com, Notion, Linear and any MCP server | Separate live database from the first publish | Admin and member roles, changeable under Settings > Team; monthly AI budgets per member, usage page |
 | Code tab with an in-browser editor | Read-only by default; connections can be limited to specific apps | Push to your GitHub organization, automatically for new apps | Personal and organization skills |
 | Auto, Plan and Chat modes, with a model picker; apps are named, and get their address, from the first prompt | Each app gets its own Postgres database, with a Data tab | Nightly backups to S3 | Allowed Claude models and the organization default |

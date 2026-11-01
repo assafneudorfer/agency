@@ -16,7 +16,7 @@ One-click publish to `<app>.<domain>` with versioned images and rollback, team l
 
 ## 4. Brand
 
-Name, logo, landing page and a template gallery, with assets made in Higgsfield.
+Name, logo, landing page and a template gallery, with assets made in Higgsfield. Templates are implemented: an admin offers any app as a template, and members start their own app from a copy of its code.
 
 ## SSO restricted to the organization (implemented)
 

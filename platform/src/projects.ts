@@ -28,6 +28,9 @@ export interface Project {
 	// Minutes the published app has run without a visit, and when it was taken down for that (app-idle.ts).
 	app_idle_minutes: number;
 	app_asleep_since: string | null;
+	// Offered to everyone as a starting point for new apps (templates.ts).
+	is_template: boolean;
+	template_description: string;
 	created_at: string;
 }
 

@@ -28,6 +28,9 @@ An admin can offer any app to everyone as a starting point, such as a contract g
 
 Starting from a template makes a new app owned by whoever clicked it, with a copy of the template's latest code as its first version (and any packages it added). The person then changes it in the chat like any app they built. Data isn't copied: the new app gets its own empty database, and its tables, plus any rows the template's `lib/schema.ts` adds, come from the code. Later changes to the template don't reach copies made before them. Untick the box to take an app off the list; copies already made stay.
 
+<img src="assets/screenshots/templates-share.png" alt="The Share sheet with the Template section: Offer as a template to everyone, and a one-line description" width="100%">
+<img src="assets/screenshots/templates-home.png" alt="The home screen with Start from a template above the team's apps" width="100%">
+
 ## Roles
 
 Everyone is an **admin** or a **member**. Admins manage the team, connections and organization settings, and can open and change every app; members build their own apps and the ones shared with them. An admin changes someone's role from the menu next to their name under **Settings > Team**, and the change applies on that person's next click. You can't change your own role (another admin has to), and the organization always keeps at least one admin. With single sign-on, password sign-in may be open to admins only, so a member who used a password needs to sign in through SSO.

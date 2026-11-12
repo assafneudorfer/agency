@@ -1,7 +1,7 @@
 // Templates: apps an admin offers to everyone as a starting point, such as a contract generator or a
 // UTM link builder. Starting from one makes a new app owned by whoever asked, with a copy of the
-// template's code at its latest version. Data is not copied: the new app's tables, and any rows the
-// template seeds, come from its lib/schema.ts like any app's.
+// template's code at its latest version, without its history or chat attachments. Data is not copied:
+// the new app's tables, and any rows the template seeds, come from its lib/schema.ts like any app's.
 
 import { query, queryOne } from "./db.ts";
 import { touch } from "./idle.ts";
@@ -43,7 +43,9 @@ export async function setTemplate(project: Project, body: { template?: boolean; 
 
 // Waits for the new sandbox to finish setting up its workspace (entrypoint.sh), then replaces the
 // files with the template's latest version as one commit, so the first version of the new app is the
-// template and the agent's next turn builds on it. Packages the template added are installed here.
+// template and the agent's next turn builds on it. Only the latest files travel (a tar on stdin): the
+// template's history and the files its builders attached to the chat (uploads/) stay behind, since
+// either may hold things they didn't mean to share. Packages the template added are installed here.
 // "$1" is the commit message, never interpolated.
 const COPY_SCRIPT = `set -e
 for i in $(seq 1 240); do
@@ -51,11 +53,8 @@ for i in $(seq 1 240); do
 	sleep 0.5
 done
 git rev-parse -q --verify HEAD >/dev/null || { echo "The new app's workspace isn't ready" >&2; exit 1; }
-cat > /tmp/template.bundle
-git fetch -q /tmp/template.bundle main:refs/agency/template
-git read-tree -u --reset refs/agency/template
-git update-ref -d refs/agency/template
-rm -f /tmp/template.bundle
+git rm -rq --ignore-unmatch .
+tar -xf - --exclude=./uploads --exclude=uploads
 cmp -s package-lock.json /opt/template/package-lock.json || npm install --no-audit --no-fund >/dev/null
 git add -A
 git diff --cached --quiet || git commit -q -m "$1"`;
@@ -64,14 +63,14 @@ git diff --cached --quiet || git commit -q -m "$1"`;
 export async function createFromTemplate(template: Project, ownerId: string): Promise<Project> {
 	touch(template.id);
 	await ensureSandbox(template);
-	const bundle = await execArgv(template, ["git", "bundle", "create", "-", "main"], { timeoutMs: 120_000 });
-	if (bundle.code !== 0 || bundle.stdout.length === 0) {
-		throw new Error(`Couldn't read the template's code: ${bundle.stderr.trim() || "empty bundle"}`);
+	const files = await execArgv(template, ["git", "archive", "--format=tar", "main"], { timeoutMs: 120_000 });
+	if (files.code !== 0 || files.stdout.length === 0) {
+		throw new Error(`Couldn't read the template's code: ${files.stderr.trim() || "no files"}`);
 	}
 	const project = await createProject(template.name, ownerId);
 	try {
 		const copy = await execArgv(project, ["bash", "-c", COPY_SCRIPT, "copy", `Start from the ${template.name} template`], {
-			input: bundle.stdout,
+			input: files.stdout,
 			timeoutMs: 10 * 60_000,
 		});
 		if (copy.code !== 0) throw new Error(`Couldn't copy the template: ${copy.stderr.trim() || `exit ${copy.code}`}`);

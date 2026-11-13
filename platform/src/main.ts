@@ -97,6 +97,7 @@ import {
 	SkillError,
 	updateSkill,
 } from "./skills.ts";
+import { createFromTemplate, getTemplate, listTemplates, setTemplate, TemplateError } from "./templates.ts";
 import { saveSso, signInOptions, SsoError, ssoFinish, ssoStartUrl, ssoView } from "./sso.ts";
 import { assertBudget, BudgetError, listUsersWithUsage, parseBudget, recordUsage, setBudget, usageDetail, usageFor } from "./usage.ts";
 
@@ -129,6 +130,7 @@ async function projectView(project: Project, role: ProjectRole | null) {
 		agentRunning: bridgeFor(project).running,
 		role,
 		teamAccess: project.team_access,
+		template: project.is_template ? { description: project.template_description } : null,
 	};
 }
 
@@ -140,7 +142,7 @@ app.onError((error, c) => {
 	if (error instanceof DataError) return c.json({ error: error.message }, 400);
 	if (error instanceof AccessError) return c.json({ error: error.message }, 403);
 	if (error instanceof FileError) return c.json({ error: error.message }, 400);
-	if (error instanceof GitHubError || error instanceof MailError || error instanceof SsoError || error instanceof SkillError || error instanceof ModelError) return c.json({ error: error.message }, 400);
+	if (error instanceof GitHubError || error instanceof MailError || error instanceof SsoError || error instanceof SkillError || error instanceof ModelError || error instanceof TemplateError) return c.json({ error: error.message }, 400);
 	if (error instanceof NotFoundError) return c.json({ error: error.message }, 404);
 	console.error(error);
 	return c.json({ error: errorMessage(error) }, 500);
@@ -379,6 +381,26 @@ api.put("/projects/:id/sharing", async (c) => {
 	if (body.member) await setMember(project, String(body.member.userId ?? ""), body.member.role ?? null);
 	const updated = (await getProject(project.id))!;
 	return c.json({ ...(await getSharing(updated)), canManage: true });
+});
+
+// ---------------------------------------------------------------------------
+// Templates: apps an admin offers to everyone as a starting point
+
+api.get("/templates", async (c) => c.json(await listTemplates()));
+
+api.post("/templates/:id/use", async (c) => {
+	const template = await getTemplate(c.req.param("id"));
+	if (!template) throw new NotFoundError("Template not found");
+	const project = await createFromTemplate(template, c.get("user").id);
+	// After the copy, so a new repository starts with the template's code.
+	linkNewApp(project.id);
+	return c.json(await projectView(project, "owner"), 201);
+});
+
+api.put("/projects/:id/template", requireAdmin, async (c) => {
+	const { project, role } = await projectFor(c, "owner");
+	await setTemplate(project, await c.req.json<{ template?: boolean; description?: string }>());
+	return c.json(await projectView(project, role));
 });
 
 /** Everyone on the team, for picking people to share an app with. */

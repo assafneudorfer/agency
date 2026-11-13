@@ -157,6 +157,10 @@ create unique index if not exists user_skills_org_name on user_skills (name) whe
 -- visit (only while the platform runs), and when it was taken down. Its next visit starts it again.
 alter table projects add column if not exists app_idle_minutes integer not null default 0;
 alter table projects add column if not exists app_asleep_since timestamptz;
+
+-- Templates (templates.ts): apps an admin offers to everyone as a starting point for new apps.
+alter table projects add column if not exists is_template boolean not null default false;
+alter table projects add column if not exists template_description text not null default '';
 `;
 
 export async function migrate(): Promise<void> {

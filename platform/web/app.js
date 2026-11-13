@@ -480,6 +480,8 @@ const IDEAS = [
 
 function Home() {
 	const [projects, setProjects] = useState(null);
+	const [templates, setTemplates] = useState([]);
+	const [copying, setCopying] = useState(null);
 	const [prompt, setPrompt] = useState("");
 	const [name, setName] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -487,7 +489,20 @@ function Home() {
 	const field = useRef(null);
 	useEffect(() => {
 		api("/projects").then(setProjects, (err) => setError(err.message));
+		api("/templates").then(setTemplates, () => {});
 	}, []);
+	const startFromTemplate = async (template) => {
+		if (copying) return;
+		setCopying(template.id);
+		setError("");
+		try {
+			const project = await api(`/templates/${template.id}/use`, { method: "POST" });
+			location.hash = `#/p/${project.id}`;
+		} catch (err) {
+			setError(err.message);
+			setCopying(null);
+		}
+	};
 	const create = async () => {
 		if (!prompt.trim() || busy) return;
 		setBusy(true);
@@ -538,6 +553,28 @@ function Home() {
 			</div>
 			${error && html`<p class="error">${error}</p>`}
 		</section>
+		${templates.length > 0 &&
+		html`<h2 class="section-title">Start from a template <span class="faint">${templates.length}</span></h2>
+			<div class="grid templates">
+				${templates.map(
+					(t, i) => html`<button
+						class="project-card template-card"
+						style=${`--i:${i};--hue:${hueOf(t.name)}`}
+						disabled=${Boolean(copying)}
+						title="Make your own app from a copy of this one"
+						onClick=${() => startFromTemplate(t)}
+					>
+						<div class="thumb">
+							<span class="initial">${t.name.trim().slice(0, 1).toUpperCase()}</span>
+							<span class="badge">${copying === t.id ? html`<span class="spinner"></span> Copying` : html`${icon("wand")} Template`}</span>
+						</div>
+						<div class="meta">
+							<strong>${t.name}</strong>
+							<div class="host">${t.description || "Start your own copy and change it in the chat."}</div>
+						</div>
+					</button>`,
+				)}
+			</div>`}
 		<h2 class="section-title">Apps ${projects?.length ? html`<span class="faint">${projects.length}</span>` : null}</h2>
 		${projects === null
 			? html`<div class="empty"><span class="spinner"></span></div>`
@@ -557,7 +594,7 @@ function Home() {
 												: html`<span class="badge">Draft</span>`}
 								</div>
 								<div class="meta">
-									<strong>${p.name} ${p.role === "viewer" && html`<span class="badge">View only</span>`}</strong>
+									<strong>${p.name} ${p.role === "viewer" && html`<span class="badge">View only</span>`} ${p.template && html`<span class="badge">Template</span>`}</strong>
 									<div class="host">${p.slug}.${location.hostname}</div>
 								</div>
 							</a>`,
@@ -801,7 +838,7 @@ function AppTitle({ project, canEdit, onRenamed }) {
 	/>`;
 }
 
-function Builder({ id }) {
+function Builder({ id, user }) {
 	const [project, setProject] = useState(null);
 	const [items, setItems] = useState([]);
 	const [running, setRunning] = useState(false);
@@ -1244,7 +1281,7 @@ function Builder({ id }) {
 				<${GitHubPanel} project=${project} running=${running} open=${panel === "github"} />
 			<//>
 			<${Sheet} open=${panel === "share"} title="Share" onClose=${() => setPanel(null)}>
-				<${SharePanel} project=${project} onChange=${loadProject} />
+				<${SharePanel} project=${project} isAdmin=${user.role === "admin"} onChange=${loadProject} />
 			<//>
 			<${Sheet} open=${panel === "publish"} title="Publish" onClose=${() => setPanel(null)}>
 				<${PublishPanel} project=${project} running=${running} onChange=${loadProject} />
@@ -1982,7 +2019,41 @@ const TEAM_ACCESS = {
 	editor: "Everyone on the team can edit",
 };
 
-function SharePanel({ project, onChange }) {
+/** Admins offer an app to everyone as a starting point: new apps start from a copy of its code. */
+function TemplateSettings({ project, onChange }) {
+	const [description, setDescription] = useState(project.template?.description ?? "");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState("");
+	useEffect(() => setDescription(project.template?.description ?? ""), [project.id, project.template?.description]);
+	const save = async (body) => {
+		setBusy(true);
+		setError("");
+		try {
+			await api(`/projects/${project.id}/template`, { method: "PUT", body });
+			onChange();
+			toast(body.template === false ? "No longer a template" : "Template saved");
+		} catch (err) {
+			setError(err.message);
+		}
+		setBusy(false);
+	};
+	return html`<h4 class="section-title" style="margin:16px 0 0">Template</h4>
+		<label class="row" style="gap:8px">
+			<input type="checkbox" checked=${Boolean(project.template)} disabled=${busy} onChange=${(e) => save({ template: e.target.checked, description })} />
+			<span>Offer as a template to everyone</span>
+		</label>
+		${project.template &&
+		html`<div class="row share-add">
+			<input class="input grow" maxlength="200" placeholder="What it's for, in one line" value=${description} onInput=${(e) => setDescription(e.target.value)} />
+			<button class="btn sm" disabled=${busy || description === (project.template.description ?? "")} onClick=${() => save({ description })}>Save</button>
+		</div>`}
+		<p class="faint" style="font-size:13px;margin:4px 0 0">
+			Everyone sees templates on the home screen and can start their own app from a copy of this app's latest code. Data isn't copied, except rows its lib/schema.ts adds.
+		</p>
+		${error && html`<p class="error">${error}</p>`}`;
+}
+
+function SharePanel({ project, isAdmin, onChange }) {
 	const [data, setData] = useState(null);
 	const [people, setPeople] = useState([]);
 	const [pick, setPick] = useState("");
@@ -2058,6 +2129,7 @@ function SharePanel({ project, onChange }) {
 		</div>`}
 		${!data.canManage && html`<div class="callout">Only the owner or an admin can change who has access.</div>`}
 		${error && html`<p class="error">${error}</p>`}
+		${isAdmin && html`<${TemplateSettings} project=${project} onChange=${onChange} />`}
 	</div>`;
 }
 
@@ -3701,7 +3773,7 @@ function App() {
 	const view = useMemo(() => {
 		if (!user) return null;
 		const project = /^\/p\/([0-9a-f-]+)/.exec(route);
-		if (project) return html`<${Builder} id=${project[1]} />`;
+		if (project) return html`<${Builder} id=${project[1]} user=${user} />`;
 		// Pages that moved under Settings keep working from old links.
 		const moved = /^\/(connections|usage|team|skills)\b/.exec(route);
 		if (moved) {
